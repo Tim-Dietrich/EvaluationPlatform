@@ -29,11 +29,12 @@ to your credential. The local `.env` file is ignored by Git:
 Copy-Item .env.example .env
 ```
 
-Run Harbor under `python-dotenv` so every setting, including `PYTHONUTF8`, is in
-place before Harbor starts:
+Run the project launcher. It loads `.env` before starting Harbor so every
+setting, including `PYTHONUTF8`, is in place, and passes the selected provider
+and model to Harbor's experiment history:
 
 ```powershell
-.venv\Scripts\python.exe -m dotenv run -- .venv\Scripts\harbor.exe run --config experiment.yaml
+.venv\Scripts\python.exe main.py
 ```
 
 Harbor assigns each launch a timestamped job name. This preserves earlier runs
@@ -57,7 +58,13 @@ contains Unicode characters; it is harmless on UTF-8-native systems.
 
 The default Self-Collaboration model is `moonshotai/kimi-k2.5` through
 OpenRouter. To use another OpenAI-compatible endpoint, change `MODEL`,
-`BASE_URL`, and `API_KEY` in `.env` without changing tracked files.
+`MODEL_PROVIDER`, `BASE_URL`, and `API_KEY` in `.env` without changing tracked
+files. `MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
+Free OpenRouter models can be temporarily rate-limited even with a valid key.
+The adapter now waits and retries two additional times after Self-Collaboration
+exhausts its initial three requests; if all nine requests are throttled, the job
+log reports the rate limit and affected model explicitly. In that case, retry
+later or select a model with available capacity.
 
 Harbor writes each timestamped job beneath `jobs/`. Each trial contains:
 
@@ -66,6 +73,14 @@ Harbor writes each timestamped job beneath `jobs/`. Each trial contains:
 - `verifier/pytest-output.log`: NL2RepoBench pytest output;
 - `verifier/evaluator-output.json`: pass/fail counts and success rate;
 - `verifier/reward.txt`: the score consumed by Harbor.
+
+The Harbor results view records the provider, model, and NL2RepoBench dataset
+label for each run. It also aggregates uncached input, cached input, and output
+tokens across every Self-Collaboration model call. Cost is recorded when the
+OpenAI-compatible API includes a `cost` value in its usage response; otherwise
+Harbor leaves Cost USD empty rather than estimating it from a potentially stale
+pricing table. These fields apply to new runs and do not retrofit existing job
+directories.
 
 The container is based on NL2RepoBench's original `math-verify:1.0` image, but
 its benchmark workspace is root-only. Self-Collaboration runs as the

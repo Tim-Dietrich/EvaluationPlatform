@@ -41,6 +41,7 @@ def test_verifier_preserves_original_commands_and_reports_fractional_score():
 def test_task_collects_workspace_and_declares_timeouts():
     config = tomllib.loads((TASK_ROOT / "task.toml").read_text(encoding="utf-8"))
 
+    assert config["source"] == "NL2RepoBench"
     assert "/app" in config["artifacts"]
     assert config["agent"]["timeout_sec"] > 0
     assert config["verifier"]["timeout_sec"] > 0
