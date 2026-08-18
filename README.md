@@ -60,6 +60,17 @@ The default Self-Collaboration model is `moonshotai/kimi-k2.5` through
 OpenRouter. To use another OpenAI-compatible endpoint, change `MODEL`,
 `MODEL_PROVIDER`, `BASE_URL`, and `API_KEY` in `.env` without changing tracked
 files. `MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
+For DeepSeek V4 Flash, use the official OpenAI-compatible endpoint (there is no
+`/api/v1` path):
+
+```dotenv
+MODEL_PROVIDER=deepseek
+MODEL=deepseek-v4-flash
+BASE_URL=https://api.deepseek.com
+```
+
+The launcher rejects the common `https://api.deepseek.com/api/v1` typo before
+starting Harbor. DeepSeek also accepts `https://api.deepseek.com/v1`.
 Free OpenRouter models can be temporarily rate-limited even with a valid key.
 The adapter now waits and retries two additional times after Self-Collaboration
 exhausts its initial three requests; if all nine requests are throttled, the job

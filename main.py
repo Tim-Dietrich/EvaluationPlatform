@@ -13,6 +13,17 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).parent
 
 
+def validate_environment(environment: Mapping[str, str]) -> None:
+    provider = environment.get("MODEL_PROVIDER", "openrouter").lower()
+    base_url = environment.get("BASE_URL", "")
+    if provider == "deepseek" and base_url.rstrip("/").endswith("/api/v1"):
+        raise ValueError(
+            "DeepSeek does not serve its OpenAI-compatible API at '/api/v1'. "
+            "Set BASE_URL=https://api.deepseek.com (or "
+            "https://api.deepseek.com/v1)."
+        )
+
+
 def build_harbor_config(environment: Mapping[str, str]) -> dict[str, Any]:
     config = yaml.safe_load((ROOT / "experiment.yaml").read_text(encoding="utf-8"))
     provider = environment.get("MODEL_PROVIDER", "openrouter")
@@ -37,6 +48,11 @@ def build_harbor_command(
 
 def main() -> int:
     load_dotenv(ROOT / ".env")
+    try:
+        validate_environment(os.environ)
+    except ValueError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 2
     jobs_dir = ROOT / "jobs"
     jobs_dir.mkdir(exist_ok=True)
     config_path: Path | None = None
