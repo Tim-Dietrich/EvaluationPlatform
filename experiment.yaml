@@ -1,0 +1,16 @@
+job_name: nl2repobench-math-verify-self-collaboration
+jobs_dir: jobs
+n_attempts: 1
+n_concurrent_trials: 1
+tasks:
+  - path: harbor_tasks/math-verify
+agents:
+  - import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
+    n_concurrent: 1
+    env:
+      API_KEY: "${API_KEY}"
+      API_KEY_ENV: API_KEY
+      BASE_URL: "${BASE_URL:-https://openrouter.ai/api/v1}"
+      MODEL: "${MODEL:-moonshotai/kimi-k2.5}"
+extra_instruction_paths:
+  - benchmarks/NL2RepoBench/test_files/math-verify/start.md

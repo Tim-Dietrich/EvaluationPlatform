@@ -1,0 +1,22 @@
+schema_version = "1.4"
+artifacts = ["/app"]
+
+[task]
+name = "local/math-verify"
+version = "0.1.0"
+
+[metadata]
+benchmark = "NL2RepoBench"
+benchmark_task = "math-verify"
+
+[environment]
+workdir = "/app"
+build_timeout_sec = 1200
+
+[agent]
+timeout_sec = 3600
+user = "agent"
+
+[verifier]
+timeout_sec = 1800
+user = "root"
