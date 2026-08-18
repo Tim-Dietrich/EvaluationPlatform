@@ -11,7 +11,7 @@ HISTORY_PATH = Path("/logs/agent/session-history.json")
 
 
 def main() -> None:
-    instruction = os.environ["HARBOR_TASK_INSTRUCTION"]
+    instruction = _read_instruction()
     sys.path.insert(0, str(SELF_COLLABORATION_ROOT))
 
     agent_module = importlib.import_module("core.agent")
@@ -47,6 +47,12 @@ def main() -> None:
             indent=2,
         ),
         encoding="utf-8",
+    )
+
+
+def _read_instruction() -> str:
+    return Path(os.environ["HARBOR_TASK_INSTRUCTION_PATH"]).read_text(
+        encoding="utf-8"
     )
 
 

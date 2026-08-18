@@ -18,6 +18,7 @@ def test_env_example_documents_required_and_optional_settings():
 def test_experiment_forwards_only_configured_llm_environment():
     config = yaml.safe_load((ROOT / "experiment.yaml").read_text(encoding="utf-8"))
 
+    assert "job_name" not in config
     assert config["agents"][0]["env"] == {
         "API_KEY": "${API_KEY}",
         "API_KEY_ENV": "API_KEY",
@@ -31,3 +32,9 @@ def test_readme_runs_harbor_under_dotenv():
 
     assert "-m dotenv run --" in readme
     assert "--env-file" not in readme
+
+
+def test_readme_points_viewer_at_current_jobs_directory():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "harbor.exe view .\\jobs --jobs" in readme

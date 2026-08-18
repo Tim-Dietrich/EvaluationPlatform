@@ -8,8 +8,10 @@ from harbor.models.agent.context import AgentContext
 
 from src.evaluation_platform.self_collaboration_agent import (
     SELF_COLLABORATION_COMMIT,
+    TASK_INSTRUCTION_PATH,
     SelfCollaborationAgent,
 )
+from src.evaluation_platform.run_self_collaboration import _read_instruction
 
 
 class RecordingEnvironment:
@@ -18,6 +20,7 @@ class RecordingEnvironment:
     def __init__(self):
         self.commands = []
         self.uploads = []
+        self.upload_contents = []
 
     async def exec(self, **kwargs):
         self.commands.append(kwargs)
@@ -25,6 +28,7 @@ class RecordingEnvironment:
 
     async def upload_file(self, source, target):
         self.uploads.append((Path(source), target))
+        self.upload_contents.append(Path(source).read_text(encoding="utf-8"))
 
 
 def test_install_pins_upstream_and_uploads_runner(tmp_path):
@@ -39,16 +43,17 @@ def test_install_pins_upstream_and_uploads_runner(tmp_path):
     assert environment.uploads[0][1] == "/installed-agent/run_self_collaboration.py"
 
 
-def test_run_passes_instruction_and_credentials_only_via_environment(tmp_path):
+def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tmp_path):
     environment = RecordingEnvironment()
     agent = SelfCollaborationAgent(
         logs_dir=tmp_path,
         extra_env={"OPENROUTER_API_KEY": "secret", "MODEL": "test/model"},
     )
+    instruction = "Build the library\n" * 10_000
 
     asyncio.run(
         agent.run(
-            "Build the library",
+            instruction,
             cast(BaseEnvironment, cast(object, environment)),
             AgentContext(),
         )
@@ -57,6 +62,18 @@ def test_run_passes_instruction_and_credentials_only_via_environment(tmp_path):
     invocation = environment.commands[-1]
     assert "Build the library" not in invocation["command"]
     assert "secret" not in invocation["command"]
-    assert invocation["env"]["HARBOR_TASK_INSTRUCTION"] == "Build the library"
+    assert invocation["env"] == {
+        "HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH
+    }
+    assert environment.uploads[-1][1] == TASK_INSTRUCTION_PATH
+    assert environment.upload_contents[-1] == instruction
     assert agent._extra_env["OPENROUTER_API_KEY"] == "secret"
     assert invocation["cwd"] == "/app"
+
+
+def test_runner_reads_utf8_instruction_file(tmp_path, monkeypatch):
+    instruction_path = tmp_path / "instruction.md"
+    instruction_path.write_text("Verify ∪ and 中文 input", encoding="utf-8")
+    monkeypatch.setenv("HARBOR_TASK_INSTRUCTION_PATH", str(instruction_path))
+
+    assert _read_instruction() == "Verify ∪ and 中文 input"

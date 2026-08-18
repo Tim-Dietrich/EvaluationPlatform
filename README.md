@@ -36,6 +36,19 @@ place before Harbor starts:
 .venv\Scripts\python.exe -m dotenv run -- .venv\Scripts\harbor.exe run --config experiment.yaml
 ```
 
+Harbor assigns each launch a timestamped job name. This preserves earlier runs
+and avoids trying to resume a saved trial whose configuration no longer matches
+the current experiment. To inspect results, stop any viewer started from an old
+clone and launch it from this repository with the current `jobs` directory:
+
+```powershell
+.venv\Scripts\harbor.exe view .\jobs --jobs
+```
+
+The viewer's jobs path is independent of the experiment runner. Seeing an old
+clone in the viewer is therefore harmless to runs, but that viewer will not show
+jobs created in this repository until it is restarted with the path above.
+
 `experiment.yaml` explicitly forwards only `API_KEY`, `MODEL`, and `BASE_URL`
 to Self-Collaboration. Harbor keeps the credential as an environment reference
 in its saved configuration rather than writing the value into tracked files.
@@ -46,7 +59,7 @@ The default Self-Collaboration model is `moonshotai/kimi-k2.5` through
 OpenRouter. To use another OpenAI-compatible endpoint, change `MODEL`,
 `BASE_URL`, and `API_KEY` in `.env` without changing tracked files.
 
-Harbor writes the job beneath `jobs/`. Each trial contains:
+Harbor writes each timestamped job beneath `jobs/`. Each trial contains:
 
 - `artifacts/app/`: generated workspace;
 - `agent/`: Self-Collaboration console log and structured session history;

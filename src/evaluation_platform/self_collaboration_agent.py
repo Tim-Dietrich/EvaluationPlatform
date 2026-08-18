@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
@@ -8,6 +9,7 @@ SELF_COLLABORATION_COMMIT = "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"
 SELF_COLLABORATION_REPOSITORY = (
     "https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git"
 )
+TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
 
 
 class SelfCollaborationAgent(BaseInstalledAgent):
@@ -43,12 +45,20 @@ class SelfCollaborationAgent(BaseInstalledAgent):
             environment: BaseEnvironment,
             context: AgentContext,
     ) -> None:
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "python /installed-agent/run_self_collaboration.py "
-                "2>&1 | tee /logs/agent/self-collaboration.log"
-            ),
-            env={"HARBOR_TASK_INSTRUCTION": instruction},
-            cwd="/app",
-        )
+        with TemporaryDirectory() as temp_dir:
+            instruction_source = Path(temp_dir) / "task-instruction.md"
+            instruction_source.write_text(instruction, encoding="utf-8")
+            await self._upload_agent_owned_file(
+                environment,
+                instruction_source,
+                TASK_INSTRUCTION_PATH,
+            )
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "python /installed-agent/run_self_collaboration.py "
+                    "2>&1 | tee /logs/agent/self-collaboration.log"
+                ),
+                env={"HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH},
+                cwd="/app",
+            )
