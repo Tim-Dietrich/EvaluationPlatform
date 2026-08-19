@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 SELF_COLLABORATION_ROOT = Path("/installed-agent/self-collaboration")
-WORKSPACE = Path("/app")
+WORKSPACE = Path("/workspace")
 HISTORY_PATH = Path("/logs/agent/session-history.json")
 USAGE_PATH = Path("/logs/agent/model-usage.json")
 

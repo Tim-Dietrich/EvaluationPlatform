@@ -1,6 +1,3 @@
-[submodule "benchmarks/NL2RepoBench"]
-	path = benchmarks/NL2RepoBench
-	url = https://github.com/Tim-Dietrich/NL2RepoBench.git
 [submodule "code_generation/Self-collaboration-Code-Generation"]
 	path = code_generation/Self-collaboration-Code-Generation
 	url = https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation

@@ -7,8 +7,10 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 from src.evaluation_platform.self_collaboration_agent import (
+    OPENAI_PACKAGE,
     SELF_COLLABORATION_COMMIT,
     TASK_INSTRUCTION_PATH,
+    TASK_WORKSPACE,
     SelfCollaborationAgent,
 )
 from src.evaluation_platform.run_self_collaboration import (
@@ -52,16 +54,8 @@ def test_install_pins_upstream_and_uploads_runner(tmp_path):
     commands = "\n".join(command["command"] for command in environment.commands)
     assert SELF_COLLABORATION_COMMIT in commands
     assert "git clone" in commands
-    assert "pip install" not in commands
+    assert OPENAI_PACKAGE in commands
     assert environment.uploads[0][1] == "/installed-agent/run_self_collaboration.py"
-
-
-def test_task_image_preinstalls_agent_dependency():
-    dockerfile = Path(
-        "harbor_tasks/math-verify/environment/Dockerfile"
-    ).read_text(encoding="utf-8")
-
-    assert "openai==2.54.0" in dockerfile
 
 
 def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tmp_path):
@@ -89,7 +83,7 @@ def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tm
     assert environment.uploads[-1][1] == TASK_INSTRUCTION_PATH
     assert environment.upload_contents[-1] == instruction
     assert agent._extra_env["OPENROUTER_API_KEY"] == "secret"
-    assert invocation["cwd"] == "/app"
+    assert invocation["cwd"] == TASK_WORKSPACE
 
 
 def test_runner_reads_utf8_instruction_file(tmp_path, monkeypatch):

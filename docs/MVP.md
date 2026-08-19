@@ -14,17 +14,16 @@ Harbor is the orchestrator. Do not build a custom platform.
    - invokes Self-Collaboration using its existing entry point;
    - supplies the task instruction and Harbor workspace;
    - passes credentials only through environment variables.
-3. Create the minimum NL2RepoBench-to-Harbor integration that:
-   - exposes one task;
-   - prepares its workspace;
-   - runs its existing evaluator;
-   - reports the benchmark score.
+3. Reference NL2RepoBench through Harbor's own `nl2repobench/nl2repobench`
+   registry dataset (pinned by content digest), filtered to the `math-verify`
+   task. Harbor prepares the workspace and runs the evaluator itself; do not
+   hand-build a parallel task definition.
 4. Add one experiment configuration and document one command to run it.
 5. Verify that Harbor retains the generated workspace, logs, evaluator output,
    and score.
 
-Keep both submodules independent. Do not use NL2RepoBench's OpenHands generation
-path, because generation is provided by Self-Collaboration.
+Keep the Self-Collaboration submodule independent. Do not use NL2RepoBench's
+OpenHands generation path, because generation is provided by Self-Collaboration.
 
 ## Done when
 

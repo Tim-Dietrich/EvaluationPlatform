@@ -11,7 +11,9 @@ SELF_COLLABORATION_REPOSITORY = (
     "https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git"
 )
 TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
+TASK_WORKSPACE = "/workspace"
 USAGE_FILENAME = "model-usage.json"
+OPENAI_PACKAGE = "openai==2.54.0"
 
 
 class SelfCollaborationAgent(BaseInstalledAgent):
@@ -23,6 +25,10 @@ class SelfCollaborationAgent(BaseInstalledAgent):
 
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(environment, ("git",))
+        await self.exec_as_root(
+            environment,
+            command=f"python -m pip install --no-cache-dir '{OPENAI_PACKAGE}'",
+        )
         await self.exec_as_agent(
             environment,
             command=(
@@ -61,7 +67,7 @@ class SelfCollaborationAgent(BaseInstalledAgent):
                     "2>&1 | tee /logs/agent/self-collaboration.log"
                 ),
                 env={"HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH},
-                cwd="/app",
+                cwd=TASK_WORKSPACE,
             )
 
     def populate_context_post_run(self, context: AgentContext) -> None:

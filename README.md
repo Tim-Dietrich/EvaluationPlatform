@@ -1,16 +1,18 @@
 # Scientific Codegen Evaluation MVP
 
 This repository runs one Self-Collaboration generation attempt against
-NL2RepoBench's `math-verify` task using Harbor as the orchestrator. Harbor keeps
-the generated `/app` workspace under the trial's `artifacts/` directory and
-retains Self-Collaboration logs, evaluator output, and the fractional benchmark
-score under the trial logs.
+NL2RepoBench's `math-verify` task using Harbor as the orchestrator. The task
+itself comes from Harbor's own `nl2repobench/nl2repobench` registry dataset
+(pinned by content digest, filtered to `math-verify`), not a vendored copy of
+the benchmark. Harbor keeps the generated `/workspace` under the trial's
+`artifacts/` directory and retains Self-Collaboration logs, verifier output,
+and the fractional benchmark score under the trial logs.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - Docker with Linux containers enabled
-- Git submodules initialized
+- The Self-Collaboration git submodule initialized
 - An OpenRouter API key (or credentials for another OpenAI-compatible endpoint)
 
 Create the project environment and install the pinned Harbor release:
@@ -79,11 +81,10 @@ later or select a model with available capacity.
 
 Harbor writes each timestamped job beneath `jobs/`. Each trial contains:
 
-- `artifacts/app/`: generated workspace;
+- `artifacts/workspace/`: generated workspace;
 - `agent/`: Self-Collaboration console log and structured session history;
-- `verifier/pytest-output.log`: NL2RepoBench pytest output;
-- `verifier/evaluator-output.json`: pass/fail counts and success rate;
-- `verifier/reward.txt`: the score consumed by Harbor.
+- `verifier/test-output.txt`: NL2RepoBench pytest output;
+- `verifier/reward.txt`: the fractional score (`passed / 192`) consumed by Harbor.
 
 The Harbor results view records the provider, model, and NL2RepoBench dataset
 label for each run. It also aggregates uncached input, cached input, and output
@@ -93,13 +94,13 @@ Harbor leaves Cost USD empty rather than estimating it from a potentially stale
 pricing table. These fields apply to new runs and do not retrofit existing job
 directories.
 
-The container is based on NL2RepoBench's original `math-verify:1.0` image, but
-its benchmark workspace is root-only. Self-Collaboration runs as the
-unprivileged `agent` user in `/app`, so it cannot inspect hidden benchmark
-tests; Harbor runs the verifier as root. The verifier preserves NL2RepoBench's
-existing install/test commands and computes the original `passed / 192` score.
-
-The upstream NL2RepoBench post-processor removes generated packaging and test
-files before overlaying the workspace onto its evaluator image. The Harbor
-verifier mirrors that behavior directly rather than invoking the benchmark's
-OpenHands generation path or starting nested Docker containers.
+The official `nl2repobench/math-verify` task runs two containers: `main`, a
+generic Python/Node image where Self-Collaboration generates the project under
+`/workspace`, and a `tester` sidecar built from NL2RepoBench's original
+`math-verify:1.0` evaluator image, which holds the hidden benchmark tests.
+Self-Collaboration never sees the reference tests. Once it finishes, Harbor's
+verifier hook signals the sidecar over the shared workspace volume; the
+sidecar strips any test files Self-Collaboration generated, copies the
+remaining code on top of its own reference tests, installs the package, runs
+pytest, and reports `passed / 192` as the reward. This mirrors NL2RepoBench's
+own upstream evaluation flow rather than reimplementing it.
