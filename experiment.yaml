@@ -3,10 +3,8 @@ n_attempts: 1
 n_concurrent_trials: 1
 artifacts:
   - /workspace
-datasets:
-  - name: nl2repobench/nl2repobench
-    ref: "sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712"
-    task_names: ["nl2repobench/math-verify"]
+tasks:
+  - path: harbor_tasks/math-verify
 agents:
   - import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
     n_concurrent: 1

@@ -2,11 +2,16 @@
 
 This repository runs one Self-Collaboration generation attempt against
 NL2RepoBench's `math-verify` task using Harbor as the orchestrator. The task
-itself comes from Harbor's own `nl2repobench/nl2repobench` registry dataset
-(pinned by content digest, filtered to `math-verify`), not a vendored copy of
-the benchmark. Harbor keeps the generated `/workspace` under the trial's
-`artifacts/` directory and retains Self-Collaboration logs, verifier output,
-and the fractional benchmark score under the trial logs.
+files under `harbor_tasks/math-verify/` were exported from Harbor's own
+`nl2repobench/nl2repobench` registry dataset (`harbor task download
+nl2repobench/math-verify`), then checked in locally with one change: the
+`tester` sidecar's Docker image is repointed from the registry package's
+private `us-docker.pkg.dev/...` mirror (not readable without GCP credentials
+this project doesn't have) to the same `math-verify:1.0` image on its
+original public host, `ghcr.io/multimodal-art-projection/nl2repobench`. Harbor
+keeps the generated `/workspace` under the trial's `artifacts/` directory and
+retains Self-Collaboration logs, verifier output, and the fractional
+benchmark score under the trial logs.
 
 ## Prerequisites
 
