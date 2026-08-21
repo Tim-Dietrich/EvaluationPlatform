@@ -1,0 +1,77 @@
+# Experiment setup: one Self-Collaboration attempt on a single NL2RepoBench
+# task. This is the smoke-test scale of `nl2repobench-self-collaboration.yaml`
+# — same benchmark, same agent, one task — for iterating on the setup without
+# paying for a full benchmark run.
+#
+# Everything that changes what a run does belongs in a file under `configs/`.
+# Launch it with `python main.py --config configs/<name>.yaml`; the launcher
+# archives the resolved setup as `jobs/<job>/experiment-config.yaml`, so any
+# recorded result can be traced back to the configuration that produced it.
+# `.env` holds credentials only.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: math-verify-self-collaboration
+description: >-
+  Self-Collaboration (Analyst -> Coder <-> Tester) generates the math-verify
+  library from NL2RepoBench's natural-language specification. The hidden
+  reference tests stay in the tester sidecar and are never visible to the
+  agent; the reward is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 1
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+
+agent:
+  import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
+  n_concurrent: 1
+  # The revision of the code generation tool under evaluation. Pinning it here
+  # keeps the tool's version part of the recorded setup.
+  repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
+  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
+  hyperparameters:
+    # Coder rounds. The Tester runs between rounds, so `max_rounds: 1` leaves
+    # the team at Analyst -> Coder with no verification step at all.
+    max_rounds: 3
+    analyst_steps: 10
+    coder_steps: 15
+    max_tokens: 8192
+    temperature: 0.0
+    top_p: 0.95
+    # What the Tester runs in the agent's own workspace between Coder rounds.
+    # This exercises only the code and tests the agent wrote itself; the
+    # benchmark's reference tests live in the tester sidecar and stay hidden.
+    # Drop this key to disable the Tester phase.
+    #
+    # The closing `git add --intent-to-add` is not part of the test: after
+    # running the tests, Self-Collaboration discards the result unless
+    # `git diff` reports a change, and a generated-from-scratch project is
+    # entirely untracked, which `git diff` does not see. Registering intent to
+    # add makes the new files visible to it. The pytest exit status is captured
+    # first and re-raised so the Tester still reports what the tests did.
+    test_command: |
+      python -m pip install -e . -q
+      python -m pytest -q --continue-on-collection-errors
+      status=$?
+      git add --all --intent-to-add . >/dev/null 2>&1
+      exit $status

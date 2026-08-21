@@ -12,6 +12,7 @@ SELF_COLLABORATION_ROOT = Path("/installed-agent/self-collaboration")
 WORKSPACE = Path("/workspace")
 HISTORY_PATH = Path("/logs/agent/session-history.json")
 USAGE_PATH = Path("/logs/agent/model-usage.json")
+RESOLVED_SETUP_PATH = Path("/logs/agent/resolved-setup.json")
 
 
 @dataclass
@@ -32,17 +33,26 @@ class UsageTotals:
 
 
 def main() -> None:
+    hyperparameters = _read_hyperparameters()
     instruction = _read_instruction()
     sys.path.insert(0, str(SELF_COLLABORATION_ROOT))
 
     agent_module = importlib.import_module("core.agent")
     config_module = importlib.import_module("core.config")
     repo_tools_module = importlib.import_module("core.repo_tools")
+
+    model_config = config_module.ModelConfig(
+        max_tokens=hyperparameters["max_tokens"],
+        temperature=hyperparameters["temperature"],
+        top_p=hyperparameters["top_p"],
+    )
+    _record_resolved_setup(hyperparameters, model_config)
+
     usage_totals = UsageTotals()
     agent_module.call_llm_with_tools = _usage_recording_call(
         agent_module.call_llm_with_tools,
         usage_totals,
-        model=config_module.CODER_CONFIG.model,
+        model=model_config.model,
     )
 
     _initialize_repository()
@@ -56,15 +66,20 @@ def main() -> None:
 {instruction}
 """
     session = agent_module.SelfCollabSession(
-        config=config_module.CODER_CONFIG,
+        config=model_config,
         repo_path=str(WORKSPACE),
-        max_round=int(os.environ.get("SELF_COLLAB_MAX_ROUNDS", "1")),
-        analyst_steps=int(os.environ.get("SELF_COLLAB_ANALYST_STEPS", "10")),
-        coder_steps=int(os.environ.get("SELF_COLLAB_CODER_STEPS", "15")),
+        max_round=hyperparameters["max_rounds"],
+        analyst_steps=hyperparameters["analyst_steps"],
+        coder_steps=hyperparameters["coder_steps"],
         verbose=True,
     )
     try:
-        history, analyst_result, coder_result = session.run(task)
+        # Without a test command the session skips its Tester phase entirely
+        # and degrades to Analyst followed by a single Coder pass.
+        history, analyst_result, coder_result = session.run(
+            task,
+            test_cmd=hyperparameters.get("test_command"),
+        )
     finally:
         USAGE_PATH.write_text(
             json.dumps(usage_totals.to_dict(), indent=2),
@@ -138,6 +153,53 @@ def _read_instruction() -> str:
     return Path(os.environ["HARBOR_TASK_INSTRUCTION_PATH"]).read_text(
         encoding="utf-8"
     )
+
+
+def _read_hyperparameters() -> dict[str, Any]:
+    return json.loads(
+        Path(os.environ["SELF_COLLABORATION_HYPERPARAMETERS_PATH"]).read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def _record_resolved_setup(
+        hyperparameters: dict[str, Any],
+        model_config: Any,
+) -> None:
+    """Record what actually ran, next to the run's other logs.
+
+    The experiment configuration states the intended setup; this states the
+    observed one, including the commit of the code generation tool that the
+    container ended up with and the model the environment resolved to.
+    """
+    RESOLVED_SETUP_PATH.write_text(
+        json.dumps(
+            {
+                "self_collaboration_commit": _installed_commit(),
+                "model": model_config.model,
+                "base_url": model_config.base_url,
+                "hyperparameters": hyperparameters,
+                "tester_enabled": bool(hyperparameters.get("test_command")),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _installed_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=SELF_COLLABORATION_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _initialize_repository() -> None:

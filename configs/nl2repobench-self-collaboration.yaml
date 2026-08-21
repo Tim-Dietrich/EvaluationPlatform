@@ -1,0 +1,70 @@
+# Experiment setup: Self-Collaboration against the whole NL2RepoBench
+# benchmark — all 104 tasks of the pinned dataset.
+#
+# The benchmark is a dependency, not a checked-in copy: Harbor's registry
+# holds it as a digest-pinned dataset, and `benchmark.ref` fixes the version
+# every run of this configuration uses. Comparing a second code generation
+# solution means copying this file, changing only the `agent` section, and
+# leaving the `benchmark` block byte-identical.
+#
+# Scale: 104 tasks, each with its own tester image (several GB in total) and
+# its own agent and verifier timeouts. Raise `n_concurrent_trials` to match the
+# machine, and start from `math-verify-self-collaboration.yaml` when iterating
+# on the setup itself.
+
+name: nl2repobench-self-collaboration
+description: >-
+  Self-Collaboration (Analyst -> Coder <-> Tester) generates every
+  NL2RepoBench library from its natural-language specification. Each task's
+  hidden reference tests stay in its tester sidecar; the reward per task is the
+  fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 2
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  # The dataset's content digest. Resolved and re-pinned at launch, and
+  # recorded in `jobs/<job>/benchmark.json` alongside the selected tasks.
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  # Select a subset with `task_names` (glob patterns, org-qualified),
+  # `exclude_task_names`, or `n_tasks`. With none of them, the run covers the
+  # entire benchmark.
+  #
+  # The published tasks name their tester images on a private mirror that needs
+  # credentials this project does not have. The same images are public on GHCR,
+  # so each selected task's image is pulled from `pull_from` and made available
+  # locally under the name in `expects`. The benchmark's own files are never
+  # modified.
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+
+agent:
+  import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
+  n_concurrent: 2
+  repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
+  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
+  hyperparameters:
+    max_rounds: 3
+    analyst_steps: 10
+    coder_steps: 15
+    max_tokens: 8192
+    temperature: 0.0
+    top_p: 0.95
+    test_command: |
+      python -m pip install -e . -q
+      python -m pytest -q --continue-on-collection-errors
+      status=$?
+      git add --all --intent-to-add . >/dev/null 2>&1
+      exit $status

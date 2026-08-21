@@ -1,23 +1,31 @@
 # Scientific Codegen Evaluation MVP
 
-This repository runs one Self-Collaboration generation attempt against
-NL2RepoBench's `math-verify` task using Harbor as the orchestrator. The task
-files under `harbor_tasks/math-verify/` were exported from Harbor's own
-`nl2repobench/nl2repobench` registry dataset (`harbor task download
-nl2repobench/math-verify`), then checked in locally with one change: the
-`tester` sidecar's Docker image is repointed from the registry package's
-private `us-docker.pkg.dev/...` mirror (not readable without GCP credentials
-this project doesn't have) to the same `math-verify:1.0` image on its
-original public host, `ghcr.io/multimodal-art-projection/nl2repobench`. Harbor
-keeps the generated `/workspace` under the trial's `artifacts/` directory and
-retains Self-Collaboration logs, verifier output, and the fractional
-benchmark score under the trial logs.
+This repository runs code generation solutions against whole benchmarks using
+Harbor as the orchestrator, and keeps the setup of every run on record so
+results from different solutions can be compared fairly.
+
+A benchmark enters the repository as a dependency, not as checked-in task
+files. Harbor's registry carries NL2RepoBench as a digest-pinned dataset of 104
+tasks; an experiment configuration names the dataset, the version, and which of
+its tasks to run, and Harbor downloads and pins the rest. Scaling from one task
+to the full benchmark is a filter in the configuration, not an integration
+effort.
+
+Most Harbor benchmarks need nothing beyond that. NL2RepoBench is the exception:
+every one of its tasks names its tester image on a private mirror that needs GCP
+credentials this project does not have, while the same images are public on
+`ghcr.io/multimodal-art-projection/nl2repobench`. A configuration can therefore
+declare an optional `image_mirror`, and before a run the launcher resolves
+exactly the tasks the job will execute, reads the images they name, and makes
+each one available locally under the name the task expects, pulled from its
+public home; Docker Compose then uses the local image without contacting a
+registry. One rule covers all 104 NL2RepoBench tasks, and the benchmark's own
+files are never modified.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - Docker with Linux containers enabled
-- The Self-Collaboration git submodule initialized
 - An OpenRouter API key (or credentials for another OpenAI-compatible endpoint)
 
 Create the project environment and install the pinned Harbor release:
@@ -27,48 +35,46 @@ py -3.13 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[test]"
 ```
 
-## Run the experiment
+The Self-Collaboration submodule is checked out for reading and reference. The
+run itself does not use the working copy: the agent clones the revision named
+in the experiment configuration into the task container.
 
-Create a local environment file from the tracked template, then set `API_KEY`
-to your credential. The local `.env` file is ignored by Git:
+## Experiment configurations
+
+`configs/` is the home for run setup. One file describes one experiment: the
+benchmark and task selection, the model backend, the revision of the code
+generation tool, and the hyperparameters its Analyst, Coder, and Tester roles
+receive. Nothing that
+changes what a run does lives outside it — `.env` holds credentials only.
+
+Copy the tracked template and set `API_KEY` to your credential. The local
+`.env` file is ignored by Git:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Run the project launcher. It loads `.env` before starting Harbor so every
-setting, including `PYTHONUTF8`, is in place, and passes the selected provider
-and model to Harbor's experiment history:
+Run the default configuration:
 
 ```powershell
 .venv\Scripts\python.exe main.py
 ```
 
-Harbor assigns each launch a timestamped job name. This preserves earlier runs
-and avoids trying to resume a saved trial whose configuration no longer matches
-the current experiment. To inspect results, stop any viewer started from an old
-clone and launch it from this repository with the current `jobs` directory:
+Run a different one, or name the job directory yourself:
 
 ```powershell
-.venv\Scripts\harbor.exe view .\jobs --jobs
+.venv\Scripts\python.exe main.py --config configs/math-verify-self-collaboration.yaml
 ```
 
-The viewer's jobs path is independent of the experiment runner. Seeing an old
-clone in the viewer is therefore harmless to runs, but that viewer will not show
-jobs created in this repository until it is restarted with the path above.
-
-`experiment.yaml` explicitly forwards only `API_KEY`, `MODEL`, and `BASE_URL`
-to Self-Collaboration. Harbor keeps the credential as an environment reference
-in its saved configuration rather than writing the value into tracked files.
-`PYTHONUTF8=1` is required on Windows because NL2RepoBench's instruction
-contains Unicode characters; it is harmless on UTF-8-native systems.
-
-The default Self-Collaboration model is `moonshotai/kimi-k2.5` through
-OpenRouter. To use another OpenAI-compatible endpoint, change `MODEL`,
-`MODEL_PROVIDER`, `BASE_URL`, and `API_KEY` in `.env` without changing tracked
-files. `MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
-For DeepSeek V4 Flash, use the official OpenAI-compatible endpoint (there is no
-`/api/v1` path):
+The launcher loads `.env` before starting Harbor so every setting, including
+`PYTHONUTF8`, is in place. Values in a configuration may use `${VAR}` and
+`${VAR:-default}`, which resolve against the environment; the shipped
+configuration uses this for the model backend, so `MODEL`, `MODEL_PROVIDER`,
+and `BASE_URL` in `.env` still override it without editing tracked files. A
+configuration is validated before Docker starts: unknown keys, unknown
+hyperparameters, an unset credential, and DeepSeek's `/api/v1` path are all
+rejected with an explanation rather than a failed run. DeepSeek's official
+OpenAI-compatible endpoint has no `/api/v1` path:
 
 ```dotenv
 MODEL_PROVIDER=deepseek
@@ -76,36 +82,112 @@ MODEL=deepseek-v4-flash
 BASE_URL=https://api.deepseek.com
 ```
 
-The launcher rejects the common `https://api.deepseek.com/api/v1` typo before
-starting Harbor. DeepSeek also accepts `https://api.deepseek.com/v1`.
-Free OpenRouter models can be temporarily rate-limited even with a valid key.
-The adapter now waits and retries two additional times after Self-Collaboration
-exhausts its initial three requests; if all nine requests are throttled, the job
-log reports the rate limit and affected model explicitly. In that case, retry
-later or select a model with available capacity.
+`MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
+DeepSeek also accepts `https://api.deepseek.com/v1`. Free OpenRouter models can
+be temporarily rate-limited even with a valid key. The adapter waits and
+retries two additional times after Self-Collaboration exhausts its initial
+three requests; if all nine requests are throttled, the job log reports the
+rate limit and affected model explicitly.
 
-Harbor writes each timestamped job beneath `jobs/`. Each trial contains:
+## Benchmarks
 
-- `artifacts/workspace/`: generated workspace;
-- `agent/`: Self-Collaboration console log and structured session history;
-- `verifier/test-output.txt`: NL2RepoBench pytest output;
-- `verifier/reward.txt`: the fractional score (`passed / 192`) consumed by Harbor.
+The `benchmark` block of a configuration is what makes a run comparable:
 
-The Harbor results view records the provider, model, and NL2RepoBench dataset
-label for each run. It also aggregates uncached input, cached input, and output
-tokens across every Self-Collaboration model call. Cost is recorded when the
+```yaml
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/.../nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+```
+
+`image_mirror` is optional and benchmark-specific: it exists because
+NL2RepoBench publishes references to images it cannot itself pull. A benchmark
+whose images are reachable needs no rule, and omitting the key leaves the
+preparation step to resolving and pinning tasks.
+
+`ref` pins the benchmark version; a floating reference is resolved once at
+launch and re-pinned, so every trial of a run sees one version. Omit
+`task_names` to run the entire benchmark, or narrow it with glob patterns
+(org-qualified), `exclude_task_names`, and `n_tasks` — Harbor's own dataset
+filtering does the selecting, so the run and its preparation can never disagree
+about scope. `configs/nl2repobench-self-collaboration.yaml` runs all 104 tasks;
+`configs/math-verify-self-collaboration.yaml` is the same setup narrowed to one
+task for iterating cheaply.
+
+To compare a second code generation solution, copy a configuration, change only
+the `agent` section, and leave the `benchmark` block byte-identical.
+
+A configuration may instead point at a single local task directory with
+`task: {path: ...}`, for a task authored by hand rather than taken from a
+benchmark. Exactly one of `benchmark` and `task` is required.
+
+## The three roles
+
+Self-Collaboration is a team of three: the Analyst localizes the work, the
+Coder writes it, and the Tester runs the tests and reports failures back to the
+Coder for the next round. The Tester runs *between* Coder rounds, so it needs
+both halves of its setup to exist:
+
+- `test_command` — what it runs in the agent's workspace. Without it the
+  session degrades to Analyst followed by a single Coder pass.
+- `max_rounds` greater than one — with a single round the loop ends before the
+  Tester is ever reached, whatever the test command says.
+
+The Tester only ever runs the code and tests the agent wrote itself. A task's
+reference tests stay in its tester sidecar and are never visible to the agent.
+
+## Results and provenance
+
+Harbor writes each job beneath `jobs/`. Alongside Harbor's own records, each
+run keeps the setup that produced it:
+
+- `jobs/<job>/experiment-config.yaml`: the resolved experiment configuration,
+  written before the run starts, with templates expanded and defaults filled
+  in. It names the credential's environment variable, never its value.
+- `jobs/<job>/benchmark.json`: the benchmark version the run resolved to, the
+  tasks it selected, and the content digest of every tester image used.
+- `jobs/<job>/config.json`: Harbor's record, including the hyperparameters it
+  passed to the agent.
+- `<trial>/agent/resolved-setup.json`: what actually ran in the container —
+  the commit of the code generation tool, the resolved model, the
+  hyperparameters, and whether the Tester was enabled.
+- `<trial>/artifacts/workspace/`: the generated workspace.
+- `<trial>/agent/`: Self-Collaboration console log and structured session
+  history, including each round's test result.
+- `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
+  fraction of the task's reference tests that passed, consumed by Harbor.
+
+To inspect results, stop any viewer started from an old clone and launch it
+from this repository with the current `jobs` directory:
+
+```powershell
+.venv\Scripts\harbor.exe view .\jobs --jobs
+```
+
+The viewer's jobs path is independent of the experiment runner. Seeing an old
+clone in the viewer is therefore harmless to runs, but that viewer will not
+show jobs created in this repository until it is restarted with the path above.
+
+The Harbor results view records the provider, model, and dataset label for each
+run, and aggregates uncached input, cached input, and output tokens across
+every Self-Collaboration model call. Cost is recorded when the
 OpenAI-compatible API includes a `cost` value in its usage response; otherwise
 Harbor leaves Cost USD empty rather than estimating it from a potentially stale
 pricing table. These fields apply to new runs and do not retrofit existing job
 directories.
 
-The official `nl2repobench/math-verify` task runs two containers: `main`, a
-generic Python/Node image where Self-Collaboration generates the project under
-`/workspace`, and a `tester` sidecar built from NL2RepoBench's original
-`math-verify:1.0` evaluator image, which holds the hidden benchmark tests.
-Self-Collaboration never sees the reference tests. Once it finishes, Harbor's
-verifier hook signals the sidecar over the shared workspace volume; the
-sidecar strips any test files Self-Collaboration generated, copies the
-remaining code on top of its own reference tests, installs the package, runs
-pytest, and reports `passed / 192` as the reward. This mirrors NL2RepoBench's
-own upstream evaluation flow rather than reimplementing it.
+## How a task is evaluated
+
+Each NL2RepoBench task runs two containers: `main`, a generic Python/Node image
+where the agent generates the project under `/workspace`, and a `tester`
+sidecar built from NL2RepoBench's own evaluator image, which holds the hidden
+benchmark tests. Once the agent finishes, Harbor's verifier hook signals the
+sidecar over the shared workspace volume; the sidecar strips any test files the
+agent generated, copies the remaining code on top of its own reference tests,
+installs the package, runs pytest, and reports the passing fraction as the
+reward. This mirrors NL2RepoBench's own upstream evaluation flow rather than
+reimplementing it.

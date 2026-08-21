@@ -1,19 +1,25 @@
 import asyncio
+import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from src.evaluation_platform.self_collaboration_agent import (
+from evaluation_platform.experiment_config import ConfigurationError
+from evaluation_platform.self_collaboration_agent import (
+    HYPERPARAMETERS_PATH,
     OPENAI_PACKAGE,
     SELF_COLLABORATION_COMMIT,
     TASK_INSTRUCTION_PATH,
     TASK_WORKSPACE,
     SelfCollaborationAgent,
 )
-from src.evaluation_platform.run_self_collaboration import (
+from evaluation_platform import run_self_collaboration
+from evaluation_platform.run_self_collaboration import (
     UsageTotals,
     _read_instruction,
     _usage_recording_call,
@@ -75,15 +81,204 @@ def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tm
     )
 
     invocation = environment.commands[-1]
+    uploaded = dict(zip([target for _, target in environment.uploads],
+                        environment.upload_contents))
     assert "Build the library" not in invocation["command"]
     assert "secret" not in invocation["command"]
     assert invocation["env"] == {
-        "HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH
+        "HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH,
+        "SELF_COLLABORATION_HYPERPARAMETERS_PATH": HYPERPARAMETERS_PATH,
     }
-    assert environment.uploads[-1][1] == TASK_INSTRUCTION_PATH
-    assert environment.upload_contents[-1] == instruction
+    assert uploaded[TASK_INSTRUCTION_PATH] == instruction
     assert agent._extra_env["OPENROUTER_API_KEY"] == "secret"
     assert invocation["cwd"] == TASK_WORKSPACE
+
+
+def test_run_uploads_the_configured_hyperparameters_for_the_runner(tmp_path):
+    environment = RecordingEnvironment()
+    agent = SelfCollaborationAgent(
+        logs_dir=tmp_path,
+        max_rounds=4,
+        coder_steps=25,
+        test_command="pytest -q",
+    )
+
+    asyncio.run(
+        agent.run(
+            "Build the library",
+            cast(BaseEnvironment, cast(object, environment)),
+            AgentContext(),
+        )
+    )
+
+    uploaded = dict(zip([target for _, target in environment.uploads],
+                        environment.upload_contents))
+    hyperparameters = json.loads(uploaded[HYPERPARAMETERS_PATH])
+    assert hyperparameters["max_rounds"] == 4
+    assert hyperparameters["coder_steps"] == 25
+    assert hyperparameters["test_command"] == "pytest -q"
+    # Defaults are filled in, so the uploaded file is the complete setup.
+    assert hyperparameters["analyst_steps"] == 10
+    assert hyperparameters["temperature"] == 0.0
+
+
+def test_agent_rejects_a_hyperparameter_value_the_runner_cannot_use(tmp_path):
+    with pytest.raises(ConfigurationError):
+        SelfCollaborationAgent(logs_dir=tmp_path, max_rounds=0)
+
+
+def test_install_uses_the_configured_tool_revision(tmp_path):
+    environment = RecordingEnvironment()
+    agent = SelfCollaborationAgent(
+        logs_dir=tmp_path,
+        repository="https://example.invalid/fork.git",
+        commit="0123456789abcdef0123456789abcdef01234567",
+    )
+
+    asyncio.run(agent.install(cast(BaseEnvironment, cast(object, environment))))
+
+    commands = "\n".join(command["command"] for command in environment.commands)
+    assert "https://example.invalid/fork.git" in commands
+    assert "0123456789abcdef0123456789abcdef01234567" in commands
+    assert SELF_COLLABORATION_COMMIT not in commands
+
+
+class RecordingSession:
+    """Stands in for Self-Collaboration's Analyst -> Coder <-> Tester session."""
+
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.run_kwargs = None
+        RecordingSession.instances.append(self)
+
+    def run(self, task_description, test_cmd=None):
+        self.run_kwargs = {"task": task_description, "test_cmd": test_cmd}
+        return {}, "analysis", "patch"
+
+
+def install_fake_self_collaboration(monkeypatch, tmp_path):
+    """Install stand-ins for the modules the runner imports in the container."""
+    RecordingSession.instances.clear()
+
+    class ModelConfig:
+        def __init__(self, max_tokens=4096, temperature=0.0, top_p=0.95):
+            self.max_tokens = max_tokens
+            self.temperature = temperature
+            self.top_p = top_p
+            self.model = "test/free-model"
+            self.base_url = "https://openrouter.ai/api/v1"
+
+    agent_module = SimpleNamespace(
+        SelfCollabSession=RecordingSession,
+        call_llm_with_tools=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "core", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "core.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "core.config", SimpleNamespace(ModelConfig=ModelConfig))
+    monkeypatch.setitem(
+        sys.modules,
+        "core.repo_tools",
+        SimpleNamespace(get_repo_structure=lambda path: "(empty)"),
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    monkeypatch.setattr(run_self_collaboration, "WORKSPACE", workspace)
+    monkeypatch.setattr(run_self_collaboration, "SELF_COLLABORATION_ROOT", tmp_path)
+    monkeypatch.setattr(run_self_collaboration, "HISTORY_PATH", logs / "history.json")
+    monkeypatch.setattr(run_self_collaboration, "USAGE_PATH", logs / "usage.json")
+    monkeypatch.setattr(
+        run_self_collaboration, "RESOLVED_SETUP_PATH", logs / "resolved-setup.json"
+    )
+    monkeypatch.setattr(run_self_collaboration, "_initialize_repository", lambda: None)
+
+    instruction_path = tmp_path / "instruction.md"
+    instruction_path.write_text("Build the library", encoding="utf-8")
+    monkeypatch.setenv("HARBOR_TASK_INSTRUCTION_PATH", str(instruction_path))
+    return logs
+
+
+def run_runner(monkeypatch, tmp_path, hyperparameters):
+    logs = install_fake_self_collaboration(monkeypatch, tmp_path)
+    hyperparameters_path = tmp_path / "hyperparameters.json"
+    hyperparameters_path.write_text(json.dumps(hyperparameters), encoding="utf-8")
+    monkeypatch.setenv(
+        "SELF_COLLABORATION_HYPERPARAMETERS_PATH", str(hyperparameters_path)
+    )
+
+    run_self_collaboration.main()
+
+    return RecordingSession.instances[-1], logs
+
+
+def test_runner_hands_the_tester_its_test_command(tmp_path, monkeypatch):
+    session, _ = run_runner(
+        monkeypatch,
+        tmp_path,
+        {
+            "max_rounds": 3,
+            "analyst_steps": 8,
+            "coder_steps": 20,
+            "max_tokens": 8192,
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "test_command": "python -m pytest -q",
+        },
+    )
+
+    # Both are required: the Tester phase runs between Coder rounds, so it is
+    # unreachable with a single round even when a test command is configured.
+    assert session.run_kwargs["test_cmd"] == "python -m pytest -q"
+    assert session.kwargs["max_round"] == 3
+    assert session.kwargs["analyst_steps"] == 8
+    assert session.kwargs["coder_steps"] == 20
+
+
+def test_runner_leaves_the_tester_out_when_no_test_command_is_configured(
+        tmp_path, monkeypatch
+):
+    session, _ = run_runner(
+        monkeypatch,
+        tmp_path,
+        {
+            "max_rounds": 1,
+            "analyst_steps": 10,
+            "coder_steps": 15,
+            "max_tokens": 8192,
+            "temperature": 0.0,
+            "top_p": 0.95,
+        },
+    )
+
+    assert session.run_kwargs["test_cmd"] is None
+
+
+def test_runner_records_the_setup_that_actually_ran(tmp_path, monkeypatch):
+    hyperparameters = {
+        "max_rounds": 2,
+        "analyst_steps": 10,
+        "coder_steps": 15,
+        "max_tokens": 4096,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "test_command": "python -m pytest -q",
+    }
+
+    session, logs = run_runner(monkeypatch, tmp_path, hyperparameters)
+
+    recorded = json.loads(
+        (logs / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["hyperparameters"] == hyperparameters
+    assert recorded["tester_enabled"] is True
+    assert recorded["model"] == "test/free-model"
+    assert session.kwargs["config"].max_tokens == 4096
+    assert session.kwargs["config"].temperature == 0.2
+    assert session.kwargs["config"].top_p == 0.9
 
 
 def test_runner_reads_utf8_instruction_file(tmp_path, monkeypatch):
