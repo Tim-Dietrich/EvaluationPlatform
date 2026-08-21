@@ -1,0 +1,212 @@
+% Fragment intended to be \input into a larger document.
+% Deliberately uses no packages and defines no macros: it relies only on
+% sectioning, \texttt, \emph, itemize and verbatim, all of which are part of
+% core LaTeX. Adjust the sectioning level to taste.
+
+\section{Modifications to the Code Generation Solution}
+
+The code generation solution under evaluation is Self-Collaboration, a
+multi-agent method in which three roles cooperate on a programming task: an
+\emph{Analyst}, who inspects the repository and decides what has to be written;
+a \emph{Coder}, who writes it; and a \emph{Tester}, who runs the tests and
+reports failures back to the Coder for a further round. The implementation we
+evaluate is a fork of the authors' code, and our aim is to leave the method
+itself untouched, so that differences in measured performance are attributable
+to the method and the model rather than to our harness. Three interventions
+were nevertheless necessary before the method could run as described and be
+compared across configurations. The first is a matter of configuration. The
+remaining two are changes to the implementation, and are the reason this
+section exists at all.
+
+The exact revision of the solution used in every run is recorded with the run
+itself, so that any reported result can be traced to the code that produced it.
+
+\subsection{Enabling the Tester Role}
+
+In its default configuration the implementation never executes its Tester role.
+Two independent conditions in the session loop must both hold before the Tester
+is reached:
+
+\begin{itemize}
+\item A test command must be supplied. Where the caller passes none, the
+      session leaves the loop immediately after the Coder, and the Tester is
+      skipped.
+\item More than one Coder round must be permitted. The Tester runs
+      \emph{between} Coder rounds, so a session limited to a single round
+      terminates before the Tester is reached, whatever test command was given.
+\end{itemize}
+
+Neither condition is met by the defaults, with the consequence that the
+published three-role method degrades silently to a two-role one: the Analyst
+localises the work, the Coder attempts it once, and nothing verifies the
+result. This is not a defect in the solution but an omission in how it is
+invoked, and we correct it in our experiment configuration rather than in the
+solution's code. Both quantities are exposed as configuration values, are
+recorded with each run, and can therefore be varied as hyperparameters.
+
+The command given to the Tester installs the generated package and runs the
+test suite that the agent itself has written. It has no access to the
+benchmark's reference tests, which remain inside a separate container and are
+never visible to the agent; the Tester's purpose is self-verification, not
+grading.
+
+\subsection{Change Detection on Tasks Built From Scratch}
+
+The second intervention is a one-line change to the implementation.
+
+After running the tests, the Tester performs a sanity check: it inspects the
+repository to determine whether the Coder actually produced anything, and if it
+finds no change it discards the test outcome and substitutes a synthetic
+failure carrying the message ``No code changes were made''. The purpose of the
+check is to prevent a Coder that exhausted its step budget without editing
+anything from being credited with a passing test run.
+
+The check was implemented with \texttt{git diff}:
+
+\begin{verbatim}
+diff_check = subprocess.run(
+    "git diff", shell=True, cwd=self.repo_path,
+    capture_output=True, text=True,
+)
+has_diff = bool(diff_check.stdout.strip())
+if not has_diff:
+    status = "failed"
+    output = "No code changes were made - nothing to test."
+\end{verbatim}
+
+This is exact for the benchmark the implementation was written against.
+SWE-bench presents an existing repository whose files are already under version
+control; the Coder modifies those tracked files, and the resulting diff is not
+merely evidence of work but the deliverable itself, since a SWE-bench
+prediction \emph{is} a patch, which the harness extracts with the same command.
+An empty diff there genuinely means that nothing was done.
+
+The benchmark used in this work has the opposite shape. Each task supplies a
+natural-language specification and an empty workspace, and the agent must
+create an entire library from scratch. Every file the Coder writes is therefore
+untracked. Because \texttt{git diff} compares the working tree against the
+index, and untracked files appear in neither, the command reports nothing at
+all, however much code was generated. The consequences compound: a genuine test
+result is discarded on every round; the Tester can never report success, since
+the substituted status is always a failure; and the report handed to the next
+Coder round asserts that its predecessor's work does not exist, while
+instructing it not to repeat the change that failed. The Tester would run, and
+would systematically misreport what it found.
+
+It is worth noting that this cannot be repaired by having the Coder commit its
+work, which is the intuitive remedy. \texttt{git diff} reports unstaged
+modifications to tracked files; after a commit the working tree matches the
+index and the diff is empty again, so instructing the Coder to commit would
+cause the check to fail deterministically rather than intermittently. Staging
+alone fares no better, for the same reason. Neither is the method's concern in
+any case: version control appears nowhere in the published description of
+Self-Collaboration, and nowhere in the prompts given to any of its three roles.
+It enters the implementation solely as the harness's mechanism for extracting a
+SWE-bench patch.
+
+We therefore changed the check to use \texttt{git status --porcelain}, which
+reports untracked files alongside modifications:
+
+\begin{verbatim}
+change_check = subprocess.run(
+    "git status --porcelain", shell=True, cwd=self.repo_path,
+    capture_output=True, text=True,
+)
+has_changes = bool(change_check.stdout.strip())
+if not has_changes:
+    status = "failed"
+    output = "No code changes were made - nothing to test."
+\end{verbatim}
+
+The check now expresses what it was always intended to express, namely whether
+the Coder produced anything, and it does so correctly for both repair tasks and
+generation tasks. The separate diff that is shown back to the Coder as a record
+of its previous attempt is deliberately left as \texttt{git diff}, since that
+value is genuinely required to be a diff.
+
+\subsection{Sampling and Reasoning Parameters}
+
+Every model call made by the Analyst and the Coder passes through a single
+function; the Tester is deterministic and calls no model at all. That function
+constructed its request from four values: the model, the messages,
+\texttt{max\_tokens} and \texttt{temperature}. Two things follow from what it
+omitted.
+
+The first is that \texttt{top\_p} was dropped. The tool's own configuration
+object declares it, and the sibling function used by the non-agentic runner
+sends it; only the tool-calling path left it out. The same declared
+configuration therefore produced different sampling depending on which entry
+point was used, with the agentic path falling back to the provider's default.
+We now send it on both paths. This does change behaviour relative to earlier
+runs of the agentic path, which sampled at the provider's default rather than
+at the value the configuration named, and we report it for that reason.
+
+The second is that reasoning was never requested. For a model that exposes a
+reasoning or thinking mode, the amount of reasoning performed was therefore
+whatever the provider happened to default to for that model at that moment.
+Such a default is set outside the experiment, does not appear in its record,
+and may change between runs without notice. This is an uncontrolled variable in
+a place where a comparison is particularly sensitive, because reasoning tokens
+are drawn from the same output budget as the answer: a model that reasons at
+length has correspondingly less budget left to act with, and the tool-calling
+path has no fallback for a reply that consists of reasoning alone.
+
+We therefore added two optional fields to the tool's model configuration and
+pass them through to the request. \texttt{reasoning\_effort} carries the
+OpenAI-compatible field of that name. \texttt{extra\_body} carries
+provider-specific request fields verbatim, which accommodates interfaces that
+express reasoning differently, such as OpenRouter's \texttt{reasoning} object.
+Both are omitted from the request when unset, so a configuration that says
+nothing about reasoning behaves exactly as before, and an unmodified revision
+of the tool can still be pinned for a baseline run.
+
+We then measured the defaults rather than assuming them. Both models used in
+this work reason unprompted: on a trivial tool-calling request with nothing
+asked for, \texttt{deepseek-v4-flash-0731} returned 16 reasoning tokens and
+\texttt{kimi-k2.5} returned 40, in both cases accompanied by a reasoning field
+on the message. Requesting a high effort, through either field, changed neither
+model measurably on that request, while disabling reasoning through the
+provider's own object removed it entirely. Every shape was accepted; none was
+rejected. Our configurations accordingly pin reasoning explicitly to the state
+the providers currently default to, so that the setting is fixed by the
+experiment rather than by the provider, and an ablation without reasoning
+becomes a one-line change. The probe was deliberately trivial, and establishes
+which settings take effect rather than how they influence performance on a
+real task.
+
+Independently of whether reasoning is requested, each run now records the
+number of reasoning tokens it consumed, taken from the usage the provider
+reports. A run therefore carries evidence of what the model actually did, and
+not only of what it was asked to do, which allows a run made under a provider
+default to be identified as such after the fact. This matters in retrospect as
+well as in prospect: runs made before this change consumed reasoning tokens
+that were counted only in their output total, and cannot now be separated.
+
+\subsection{Scope of the Intervention}
+
+Both changes are confined to the harness that surrounds the roles: one to how
+it inspects the repository, one to how it constructs a request. The three role
+prompts, the tools available to each role, the structure of the session loop,
+the order in which the roles run, and the information passed between them are
+unmodified. No step was added to any role's instructions, and no role was given
+a capability it did not previously have.
+
+We nonetheless report them, rather than treating them as implementation
+details, for two reasons. They are modifications to the system under
+measurement, which should be disclosed on principle. And their practical effect
+is not negligible. Without the first, the Tester role, though executed,
+contributes no usable information, so a comparison drawn against the
+unmodified implementation on this class of task would in effect be a comparison
+against a two-role method. Without the second, two runs of the same written
+configuration are not guaranteed to have used the same sampling or the same
+amount of reasoning, which is the property a controlled comparison depends on.
+
+A pre-existing alternative deserves mention, since it was our first approach.
+The same effect can be obtained without touching the implementation, by having
+the Tester's command register the generated files with
+\texttt{git add --intent-to-add} once the tests have run, which makes them
+visible to \texttt{git diff}. We discarded it. It leaves the incorrect check in
+place and compensates for it externally, and it has a side effect: once the
+files are registered, the diff shown to the Coder in subsequent rounds contains
+the entire generated project, inflating the prompt for no benefit. Correcting
+the check is both smaller and more honest.

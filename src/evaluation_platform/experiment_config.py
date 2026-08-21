@@ -8,6 +8,7 @@ that is archived next to the job, so the setup behind a recorded result stays
 inspectable after the fact.
 """
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -32,11 +33,15 @@ HYPERPARAMETER_TYPES: dict[str, type] = {
     "temperature": float,
     "top_p": float,
     "test_command": str,
+    "reasoning_effort": str,
+    "request_extra": dict,
 }
 
-# Values used for hyperparameters a configuration leaves out. `test_command`
-# has no default: without one the Tester phase does not run at all, which is a
-# choice a configuration has to make deliberately.
+# Values used for hyperparameters a configuration leaves out. `test_command`,
+# `reasoning_effort` and `request_extra` have no defaults. Without a test
+# command the Tester phase does not run at all; without a reasoning setting the
+# provider's own default applies. Both are choices a configuration has to make
+# deliberately, and both are recorded either way.
 DEFAULT_HYPERPARAMETERS: dict[str, Any] = {
     "max_rounds": 3,
     "analyst_steps": 10,
@@ -230,6 +235,14 @@ def _coerce_hyperparameter(name: str, value: Any) -> Any:
             "Hyperparameter 'test_command' must be a command; remove the key to "
             "run the Coder without the Tester."
         )
+    if expected is dict:
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError) as error:
+            raise ConfigurationError(
+                f"Hyperparameter {name!r} must be JSON-serializable, since it "
+                f"is sent to the model provider verbatim: {error}"
+            ) from error
     return value
 
 

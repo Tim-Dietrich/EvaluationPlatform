@@ -12,7 +12,7 @@ from evaluation_platform.experiment_config import (
     resolve_hyperparameters,
 )
 
-SELF_COLLABORATION_COMMIT = "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"
+SELF_COLLABORATION_COMMIT = "d5f8a2339bbabd5f892dcffd04469cdc512cb03a"
 SELF_COLLABORATION_REPOSITORY = (
     "https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git"
 )

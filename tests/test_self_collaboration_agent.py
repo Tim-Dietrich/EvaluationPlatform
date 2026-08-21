@@ -21,6 +21,7 @@ from evaluation_platform.self_collaboration_agent import (
 from evaluation_platform import run_self_collaboration
 from evaluation_platform.run_self_collaboration import (
     UsageTotals,
+    _model_settings,
     _read_instruction,
     _usage_recording_call,
     _record_response_usage,
@@ -163,10 +164,13 @@ def install_fake_self_collaboration(monkeypatch, tmp_path):
     RecordingSession.instances.clear()
 
     class ModelConfig:
-        def __init__(self, max_tokens=4096, temperature=0.0, top_p=0.95):
+        def __init__(self, max_tokens=4096, temperature=0.0, top_p=0.95,
+                     reasoning_effort=None, extra_body=None):
             self.max_tokens = max_tokens
             self.temperature = temperature
             self.top_p = top_p
+            self.reasoning_effort = reasoning_effort
+            self.extra_body = extra_body
             self.model = "test/free-model"
             self.base_url = "https://openrouter.ai/api/v1"
 
@@ -257,6 +261,28 @@ def test_runner_leaves_the_tester_out_when_no_test_command_is_configured(
     assert session.run_kwargs["test_cmd"] is None
 
 
+def test_runner_records_whether_reasoning_was_requested(tmp_path, monkeypatch):
+    _, logs = run_runner(
+        monkeypatch,
+        tmp_path,
+        {
+            "max_rounds": 1,
+            "analyst_steps": 10,
+            "coder_steps": 15,
+            "max_tokens": 8192,
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "reasoning_effort": "high",
+        },
+    )
+
+    recorded = json.loads(
+        (logs / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["reasoning_requested"] is True
+    assert recorded["hyperparameters"]["reasoning_effort"] == "high"
+
+
 def test_runner_records_the_setup_that_actually_ran(tmp_path, monkeypatch):
     hyperparameters = {
         "max_rounds": 2,
@@ -275,6 +301,7 @@ def test_runner_records_the_setup_that_actually_ran(tmp_path, monkeypatch):
     )
     assert recorded["hyperparameters"] == hyperparameters
     assert recorded["tester_enabled"] is True
+    assert recorded["reasoning_requested"] is False
     assert recorded["model"] == "test/free-model"
     assert session.kwargs["config"].max_tokens == 4096
     assert session.kwargs["config"].temperature == 0.2
@@ -296,6 +323,7 @@ def test_record_response_usage_aggregates_openrouter_metrics():
             prompt_tokens=120,
             completion_tokens=30,
             prompt_tokens_details=SimpleNamespace(cached_tokens=20),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=18),
             cost=0.0015,
         )
     )
@@ -304,6 +332,7 @@ def test_record_response_usage_aggregates_openrouter_metrics():
             prompt_tokens=80,
             completion_tokens=10,
             prompt_tokens_details={"cached_tokens": 5},
+            completion_tokens_details={"reasoning_tokens": 7},
             cost=0.0005,
         )
     )
@@ -315,8 +344,59 @@ def test_record_response_usage_aggregates_openrouter_metrics():
         "input_tokens": 200,
         "cached_input_tokens": 25,
         "output_tokens": 40,
+        # Billed inside output_tokens; recorded separately so a run shows how
+        # much of its budget went to reasoning rather than to answering.
+        "reasoning_tokens": 25,
         "cost_usd": 0.002,
     }
+
+
+def test_usage_without_reasoning_details_records_no_reasoning_tokens():
+    totals = UsageTotals()
+
+    _record_response_usage(
+        SimpleNamespace(
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5)
+        ),
+        totals,
+    )
+
+    assert totals.to_dict()["reasoning_tokens"] == 0
+
+
+def test_sampling_settings_always_reach_the_model():
+    settings = _model_settings(
+        {"max_tokens": 4096, "temperature": 0.2, "top_p": 0.9}
+    )
+
+    assert settings == {"max_tokens": 4096, "temperature": 0.2, "top_p": 0.9}
+
+
+def test_reasoning_settings_are_sent_only_when_configured():
+    unset = _model_settings({"max_tokens": 1, "temperature": 0.0, "top_p": 1.0})
+    effort = _model_settings(
+        {
+            "max_tokens": 1,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "reasoning_effort": "high",
+        }
+    )
+    provider_specific = _model_settings(
+        {
+            "max_tokens": 1,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "request_extra": {"reasoning": {"effort": "high"}},
+        }
+    )
+
+    # Unset leaves the provider default in force, and lets an unmodified
+    # revision of the tool still be pinned for a baseline run.
+    assert "reasoning_effort" not in unset
+    assert "extra_body" not in unset
+    assert effort["reasoning_effort"] == "high"
+    assert provider_specific["extra_body"] == {"reasoning": {"effort": "high"}}
 
 
 def test_usage_wrapper_retries_exhausted_upstream_rate_limits():

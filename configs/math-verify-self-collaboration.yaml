@@ -46,9 +46,10 @@ agent:
   import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
   n_concurrent: 1
   # The revision of the code generation tool under evaluation. Pinning it here
-  # keeps the tool's version part of the recorded setup.
+  # keeps the tool's version part of the recorded setup. This revision carries
+  # two patches over upstream, described in docs/latex/tool-modifications.tex.
   repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
-  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
+  commit: d5f8a2339bbabd5f892dcffd04469cdc512cb03a
   hyperparameters:
     # Coder rounds. The Tester runs between rounds, so `max_rounds: 1` leaves
     # the team at Analyst -> Coder with no verification step at all.
@@ -58,20 +59,24 @@ agent:
     max_tokens: 8192
     temperature: 0.0
     top_p: 0.95
+    # Reasoning, pinned rather than inherited. Both models used here reason by
+    # default, so this fixes the current behaviour in place instead of leaving
+    # it to a provider default that is invisible in the record and free to
+    # change between runs. Set `enabled: false` for a no-reasoning ablation.
+    #
+    # Verified against OpenRouter for deepseek-v4-flash-0731 and kimi-k2.5:
+    # `reasoning.enabled` switches reasoning on and off on both, while
+    # `reasoning_effort` and `reasoning.effort` are accepted but produced no
+    # measurable change. `request_extra` is merged into the request body
+    # verbatim, so it also carries other providers' shapes; the OpenAI-
+    # compatible `reasoning_effort` field is available as a hyperparameter of
+    # its own. What actually happened is recorded as `reasoning_tokens` in the
+    # run's model usage, whichever is used.
+    request_extra:
+      reasoning:
+        enabled: true
     # What the Tester runs in the agent's own workspace between Coder rounds.
     # This exercises only the code and tests the agent wrote itself; the
     # benchmark's reference tests live in the tester sidecar and stay hidden.
     # Drop this key to disable the Tester phase.
-    #
-    # The closing `git add --intent-to-add` is not part of the test: after
-    # running the tests, Self-Collaboration discards the result unless
-    # `git diff` reports a change, and a generated-from-scratch project is
-    # entirely untracked, which `git diff` does not see. Registering intent to
-    # add makes the new files visible to it. The pytest exit status is captured
-    # first and re-raised so the Tester still reports what the tests did.
-    test_command: |
-      python -m pip install -e . -q
-      python -m pytest -q --continue-on-collection-errors
-      status=$?
-      git add --all --intent-to-add . >/dev/null 2>&1
-      exit $status
+    test_command: python -m pip install -e . -q && python -m pytest -q --continue-on-collection-errors

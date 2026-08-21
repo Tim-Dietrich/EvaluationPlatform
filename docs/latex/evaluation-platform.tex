@@ -1,0 +1,565 @@
+% Fragment intended to be \input into a larger document, alongside
+% tool-modifications.tex. It assumes the preamble provides:
+%
+%   \usepackage{todonotes}   % for \todo[inline]{...}
+%   \usepackage{booktabs}    % for \toprule / \midrule / \bottomrule
+%
+% Everything else relies only on core LaTeX: sectioning, \texttt, \emph,
+% itemize, tabular and verbatim. Adjust the sectioning level to taste.
+
+\section{The Evaluation Platform}
+\label{sec:evaluation-platform}
+
+The preceding section described the code generation solution under evaluation
+and the two interventions it required. This section describes the apparatus
+built around it: what the platform has to do, why it is assembled from an
+existing orchestrator rather than written from scratch, and what each of the
+decisions taken along the way was decided against.
+
+\subsection{What the Platform Is For}
+\label{sec:platform-purpose}
+
+The research question is comparative. We want to say how a given code
+generation solution performs on a given benchmark, and to be able to repeat
+that statement for a second solution, a second model, or a second benchmark
+without the comparison losing its meaning. Everything the platform does follows
+from that, and can be stated as four obligations.
+
+\begin{itemize}
+\item \emph{Isolation.} A generated project is untrusted code that must be
+      executed to be graded. It runs in a container, and so does its grader.
+\item \emph{Fidelity.} The benchmark grades the result, not us. Whatever
+      scoring procedure the benchmark's authors published is the procedure that
+      runs, unmodified, on the artefact the solution produced.
+\item \emph{Substitutability.} The code generation solution is the independent
+      variable. Replacing it must not require touching the benchmark, the
+      grading path, or the record-keeping.
+\item \emph{Provenance.} Every recorded number must be traceable to the exact
+      setup that produced it: benchmark version, task selection, tool revision,
+      model, and hyperparameters.
+\end{itemize}
+
+\todo[inline]{State the research question in your own terms here, and say
+explicitly which variables the thesis intends to vary (solution, model,
+benchmark, hyperparameters) and which are held fixed. The four obligations
+above are derived from that framing, so it should precede them.}
+
+The scope is deliberately narrow. The platform is not a leaderboard, a service,
+or a general agent framework; it is a reproducible experiment runner for a
+thesis, and every feature below exists because one of the four obligations
+demanded it.
+
+\subsection{Why Harbor}
+
+The first and largest decision was to not build an orchestrator. Containerised
+benchmark execution is a solved problem with several mature implementations,
+and reimplementing it would have consumed most of the available time while
+producing something less trustworthy than what already exists. The question was
+therefore which existing system to adopt.
+
+The candidates fall into three families. There are \emph{benchmark-specific
+harnesses}, such as the evaluation script shipped with SWE-bench or the
+generation-and-evaluation pipeline shipped with NL2RepoBench itself: these run
+one benchmark extremely well and nothing else. There are \emph{evaluation
+frameworks} such as Inspect AI, which are general over tasks, models and
+sandboxes, but treat the benchmark as something the experimenter expresses in
+the framework's own vocabulary rather than something obtained ready-made. And
+there are \emph{agent benchmark orchestrators} such
+as Harbor, which take the container, the agent, and the grader as the three
+things they schedule.
+
+We assessed the candidates against six criteria, weighted by how directly each
+serves the four obligations of Section~\ref{sec:platform-purpose}.
+
+\begin{table}[htbp]
+\centering
+\caption{Decision matrix for the orchestrator. Scores run from 0 (does not
+provide) to 3 (provides directly), weighted by the criterion's importance to
+the obligations in Section~\ref{sec:platform-purpose}. The benchmark-native
+harnesses --- SWE-bench's evaluation script and NL2RepoBench's own pipeline ---
+are scored as one class, since they differ in maturity rather than in kind:
+each grades one benchmark well and offers no route to a second.}
+\label{tab:orchestrator-matrix}
+\begin{tabular}{lcccc}
+\toprule
+                                        & \multicolumn{4}{c}{Candidate} \\
+Criterion (weight)                      & Harbor & Bespoke & Benchmark- & Inspect \\
+                                        &        &         & native     & AI      \\
+\midrule
+Containerised, isolated execution (3)   & 3  & 2  & 3  & 3  \\
+Agent-agnostic adapter interface (3)    & 3  & 3  & 1  & 2  \\
+Benchmark-agnostic, many benchmarks (3) & 3  & 1  & 0  & 2  \\
+Version pinning and provenance (2)      & 3  & 2  & 1  & 2  \\
+Concurrency and scale (2)               & 3  & 1  & 3  & 3  \\
+Maintenance burden on this work (2)     & 3  & 0  & 2  & 1  \\
+\midrule
+Weighted total (maximum 45)             & 45 & 24 & 24 & 33 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two of the columns need their scores justified, since neither is obvious.
+
+The \emph{bespoke} column scores full marks exactly where the system would be
+built to fit --- the agent interface --- and poorly everywhere the fit is
+irrelevant. The scale of what would be reimplemented is worth stating
+concretely: the adopted release carries some thirty-three thousand lines across
+forty-two environment-provider modules, covering Docker and Compose alongside
+Kubernetes, EC2, Modal and roughly two dozen other backends, together with a
+typed retry policy, per-phase timeout multipliers, a task registry, a results
+database and a viewer. A bespoke runner would reproduce a thin slice of this,
+and the slice it reproduced would be the one we had happened to need so far. It
+scores 2 rather than 0 on isolation because shelling out to Docker Compose is
+genuinely within reach --- the platform does exactly that for image
+preparation --- and 2 rather than 3 on provenance because run-level records are
+easy to design well, while the content-addressed benchmark registry that makes
+version pinning meaningful is not something we would have built.
+
+The \emph{Inspect AI} column is the closest competitor, and its initial
+assessment here was wrong in a way worth correcting rather than quietly fixing.
+Inspect is not, as we first assumed, restricted to prompt-and-score
+interactions: it provides first-class sandboxing, with per-sample Docker
+Compose configurations, network isolation by default, and external providers
+for Kubernetes and several cloud backends. It scores 3 on isolation and 3 on
+concurrency accordingly. Its provenance is also stronger than a framework of
+its kind usually offers --- an evaluation log records the git origin and commit
+of the evaluation code and the versions of installed packages --- but the
+dataset it records is identified by location and sample count rather than by
+content digest, which is precisely the guarantee the fidelity obligation leans
+on, so it scores 2 rather than 3.
+
+What decides against Inspect is the pair of remaining criteria. Its collection
+of packaged evaluations is large and includes SWE-bench, but not NL2RepoBench,
+so the benchmark would have to be ported into Inspect's task-and-scorer form
+--- 104 tasks, each with a compose file and a tester sidecar --- which is the
+integration effort the dependency model was adopted to avoid. And its mechanism
+for hosting a third-party agent, the agent bridge, works by redirecting the
+agent's own model calls through Inspect's provider; by default that path
+discards generation parameters such as \texttt{max\_tokens} and
+\texttt{temperature} on the grounds that they were tuned for the agent's native
+model. Those are among the hyperparameters this work varies and records, so the
+bridge would have to be worked against rather than with.
+
+\todo[inline]{If you did not in fact evaluate Inspect AI at the time, soften
+the framing above from ``our initial assessment was wrong'' to a plain
+description of the alternative. The correction reads well only if the
+assessment actually happened.}
+
+\todo[inline]{Confirm the candidate list. These are the alternatives that are
+defensible in writing, but you know which ones were genuinely on the table
+during the project. Remove any that were never considered, and add any that
+were --- an internal tool, a supervisor's suggestion, or a system you tried and
+abandoned carries more weight in a thesis than a hypothetical.}
+
+\todo[inline]{The weights and scores are a defensible reading of the evidence,
+not a measurement. Either adjust them to match your own judgement, or add a
+sentence conceding that the matrix formalises a qualitative judgement rather
+than replacing it. Reviewers are sceptical of decision matrices whose totals
+happen to confirm the choice already made; saying so first disarms the
+objection.}
+
+Three of the six criteria decided it in practice.
+
+\emph{Agent-agnosticism} is the one the thesis cannot do without. Harbor treats
+the agent as a plugin: a class with an \texttt{install} step and a \texttt{run}
+step, given a container and an instruction, judged solely by the state of the
+workspace it leaves behind. This is exactly the shape of the substitutability
+obligation. A benchmark's own harness, by contrast, has an agent baked in ---
+NL2RepoBench generates with OpenHands --- and evaluating a different solution
+through it means either replacing that path or reproducing the grading
+elsewhere. The former is invasive, the latter forfeits fidelity.
+
+\emph{Benchmark-agnosticism} decides the second axis of comparison. Harbor
+carries whole benchmarks in a registry as datasets pinned by content digest, so
+a second benchmark is a change of one line in a configuration file rather than
+an integration project. Committing to one benchmark's harness would fix the
+thesis to one benchmark permanently.
+
+\emph{Maintenance burden} decides against building it ourselves. The bespoke
+option scores well on adapter design, for the trivial reason that we would
+design it, and mid-table at best on everything that has to exist regardless of
+who the experiment is for: container lifecycle, image handling,
+concurrency, retry, result storage and a results viewer are all work that
+produces no research finding. The project brief for this work states the
+position directly --- Harbor is the orchestrator, and a custom platform is out
+of scope.
+
+The cost of the decision is a dependency on Harbor's model of a task and on its
+release cadence. We accept it and mitigate it by pinning: the project depends
+on \texttt{harbor==0.21.0} exactly, so an upstream release cannot silently
+change what a run does.
+
+\todo[inline]{If Harbor was a given rather than a choice --- prescribed by a
+supervisor, a chair, or an existing group setup --- say so plainly here instead
+of presenting the matrix as an open evaluation. A retrospective justification
+of a constraint is legitimate and worth writing, but it should be labelled as
+one.}
+
+\subsection{What the Platform Adds}
+
+Adopting an orchestrator leaves a specific and much smaller remainder: the
+things Harbor does not do because they are particular to this experiment. The
+platform is four modules and a launcher, and each exists for one of them.
+
+\begin{itemize}
+\item \texttt{experiment\_config.py} --- the experiment setup as a validated,
+      archivable object.
+\item \texttt{benchmark.py} --- resolving a benchmark to the exact tasks a run
+      will execute, and making their images obtainable.
+\item \texttt{self\_collaboration\_agent.py} --- the Harbor agent adapter,
+      running outside the container.
+\item \texttt{run\_self\_collaboration.py} --- the runner, uploaded into the
+      container and executed there.
+\item \texttt{main.py} --- the launcher that composes the three and hands
+      Harbor a job.
+\end{itemize}
+
+The split between the two agent-side files deserves a note, since it is not
+obvious from the file names. The adapter runs on the host, in Harbor's process,
+and can therefore see the experiment configuration but not the workspace; the
+runner runs inside the task container, and can see the workspace and the code
+generation tool but nothing of Harbor. Everything crossing that boundary
+crosses as a file: the instruction and the hyperparameters inward, the logs and
+the usage record outward. Keeping the boundary explicit is what makes the
+in-container half testable without Docker.
+
+\subsection{Configuration as the Unit of an Experiment}
+
+\subsubsection{One file describes one experiment}
+
+The rule the platform enforces is that everything which changes what a run does
+lives in one file under \texttt{configs/}, and \texttt{.env} holds credentials
+and nothing else. A configuration names the benchmark and the task selection,
+the model backend, the revision of the code generation tool, and the
+hyperparameters its three roles receive.
+
+The alternative --- command-line flags, environment variables, or defaults
+buried in the adapter --- was rejected for a reason specific to the provenance
+obligation. A setup spread across three mechanisms cannot be archived, and a
+result whose setup cannot be archived cannot be compared to anything later. By
+putting the setup in one document, the launcher can write the resolved form of
+that document next to the job before the run begins, and any recorded number
+remains traceable to the file that produced it.
+
+This also gives the comparison protocol a mechanical form. To evaluate a second
+code generation solution, one copies a configuration, changes only the
+\texttt{agent} section, and leaves the \texttt{benchmark} block
+byte-identical. That the two runs saw the same benchmark is then a property one
+can verify by inspection rather than a claim one has to trust.
+
+\subsubsection{Validation before Docker starts}
+
+Configurations are validated strictly and early: unknown keys in any section
+are rejected rather than ignored, hyperparameters are type-checked against a
+declared schema, an unset credential is an error, and a configuration must
+choose exactly one of a registry benchmark and a local task directory.
+
+Strictness here is a deliberate trade against convenience. A typo in a
+hyperparameter name --- \texttt{max\_round} for \texttt{max\_rounds} --- is,
+under a permissive reader, an experiment that silently runs with the default
+and reports a number attributed to a setting that never took effect. That
+failure is invisible in the results and expensive to detect afterwards.
+Rejecting the key costs one error message and removes the failure mode
+entirely. The same reasoning covers the endpoint check: DeepSeek's
+OpenAI-compatible API has no \texttt{/api/v1} path, and a run pointed at one
+fails several minutes and several container pulls later, with an error that
+does not name the cause.
+
+The template syntax \texttt{\$\{VAR\}} and \texttt{\$\{VAR:-default\}} exists
+so that the model backend can be overridden from the environment without
+editing a tracked file. The archived snapshot stores the \emph{resolved} value,
+never the template, so the record says which model answered rather than which
+environment variable was consulted.
+
+\subsubsection{Hyperparameters as a declared schema}
+
+The hyperparameters of the three roles --- round count, per-role step budgets,
+sampling parameters, and the Tester's test command --- are declared centrally
+with their types, and defaults are filled in at load time so that what is
+archived is the \emph{effective} setup rather than only the part that was
+written down.
+
+One hyperparameter deliberately has no default. Omitting \texttt{test\_command}
+disables the Tester phase entirely, which, as the previous section explained,
+reduces the published three-role method to a two-role one. That is a legitimate
+ablation, but it is not something a configuration should fall into by leaving a
+key out, so the platform requires it to be stated either way.
+
+\todo[inline]{Say which of these hyperparameters you intend to treat as
+experimental variables and which are fixed for all runs. The platform makes all
+of them varied-and-recorded; the thesis presumably varies far fewer, and the
+values it fixes (\texttt{max\_rounds: 3}, \texttt{temperature: 0.0}, the step
+budgets) need a justification here --- particularly the temperature, since
+determinism is a methodological choice with consequences for how variance is
+reported.}
+
+\subsection{The Benchmark as a Dependency}
+
+\subsubsection{Not checked in}
+
+A benchmark enters the repository as a pinned dependency rather than as copied
+task files. Harbor's registry carries NL2RepoBench as a digest-pinned dataset
+of 104 tasks; a configuration names the dataset, the version, and which tasks
+to run, and Harbor downloads the rest.
+
+Vendoring the tasks was the obvious alternative and is worse in three ways. It
+makes the repository the authority on what the benchmark contains, so a local
+edit --- however well intentioned --- silently changes the benchmark under
+which results were reported. It obscures the version, since a copy has no
+digest. And it makes scaling from one task to the full benchmark an integration
+effort rather than what it should be, a filter in the configuration. Under the
+dependency model, the difference between the smoke-test configuration and the
+full run is the presence of one \texttt{task\_names} entry.
+
+The pinning is done twice over. The configuration carries a content digest,
+and if a run is given a floating reference instead, the launcher resolves it
+once at launch and re-pins the result before any trial starts. Every trial of a
+run therefore sees one version of the benchmark, even if the registry moves
+mid-run.
+
+\subsubsection{Selection performed by Harbor, not beside it}
+
+The preparation step has to know which tasks a run will execute, in order to
+prepare their images. It could determine this by reading the configuration and
+applying the filters itself. It does not: it constructs Harbor's own dataset
+configuration object and asks it, so that the selection performed during
+preparation is the same code path as the selection performed by the job.
+
+This closes a class of bug that would otherwise be nearly undetectable. Two
+independent implementations of glob matching, exclusion, and truncation agree
+on every case one thinks to test and disagree on some case one does not, and
+the symptom --- a task whose image was never prepared --- surfaces as a
+container failure deep into a long run. Delegating removes the possibility of
+disagreement rather than reducing it.
+
+\subsubsection{The image mirror}
+
+Most Harbor benchmarks need nothing beyond the above. NL2RepoBench is the
+exception, and the exception is instructive because of how it was handled.
+
+Every one of its 104 tasks names its tester image on a private registry mirror
+requiring credentials this project does not have. The identical images are
+published openly under the project's own namespace on GHCR. The benchmark, as
+distributed, therefore cannot be run by anyone outside the organisation that
+published it, despite all of its parts being public.
+
+Three remedies were available. We could patch each task's compose file to name
+the reachable image, which modifies the benchmark and thereby forfeits the
+fidelity obligation --- and does so 104 times. We could exclude NL2RepoBench,
+which forfeits the benchmark. Or we could satisfy the reference rather than
+change it. The platform does the third: before a run, it resolves the tasks the
+job will execute, reads the image references they name, pulls each from its
+public home, and tags it locally under the name the task expects. Docker
+Compose uses a locally present image without contacting a registry, so the
+benchmark runs unmodified and is never aware that anything happened.
+
+The rule is expressed as a prefix rewrite in the configuration --- one rule
+covers all 104 tasks --- and is optional and benchmark-specific by design. A
+benchmark whose images are reachable declares no rule, and the preparation step
+reduces to resolving and pinning. The digest of every image actually used is
+recorded with the run, so the substitution is documented rather than merely
+performed.
+
+\todo[inline]{Consider whether to report this upstream, and say here whether
+you did. A benchmark that cannot be executed outside its authoring organisation
+is a reproducibility defect in a published artefact, and noting it --- with or
+without a filed issue --- is a small independent contribution of this work.}
+
+\subsection{Running the Solution Inside the Task}
+
+\subsubsection{Cloning the tool at a pinned commit}
+
+The agent adapter installs the code generation solution by cloning it into the
+container at the exact commit named in the configuration, rather than mounting
+the working copy checked out beside the repository. The submodule under
+\texttt{code\_generation/} exists for reading and reference; no run consumes
+it.
+
+This is a provenance decision. A mounted working copy makes the tool's revision
+whatever the developer's checkout happened to be at launch --- unrecorded,
+unreproducible, and quietly different between the run that produced a number
+and the run meant to confirm it. Cloning a named commit makes the tool's
+version part of the archived setup, on the same footing as the benchmark
+digest. The runner then reports the commit the container actually ended up
+with, which is discussed below.
+
+\subsubsection{The instruction travels as a file}
+
+The task instruction is written to a file and uploaded into the container
+rather than passed as a command-line argument.
+
+The immediate cause was encoding. NL2RepoBench instructions are long
+natural-language specifications containing mathematical notation and non-ASCII
+characters, and a command line is a lossy channel for them --- quoting, length
+limits, and, on Windows hosts, a code page that is not UTF-8. The failure is
+not clean: the instruction arrives corrupted rather than absent, and the
+solution then works diligently on a subtly wrong specification. Writing a file
+with an explicit encoding and reading it back with the same one removes the
+channel from the problem. The hyperparameters travel the same way, for
+consistency rather than necessity.
+
+\subsubsection{Initialising the workspace repository}
+
+The runner initialises a Git repository in the workspace, with one empty
+commit, before the session starts.
+
+This is the platform's half of the issue described in the previous section. The
+code generation solution inspects the repository to decide whether its Coder
+produced anything, and shows the Coder a diff of its own previous attempt
+between rounds. Both facilities assume a repository exists, which is true of
+the benchmark the solution was written against and false of a benchmark that
+hands the agent an empty workspace. Rather than modify the solution to tolerate
+a workspace without version control, the platform supplies the precondition the
+solution already expects. The corresponding change on the solution's side ---
+inspecting status rather than diff, so that untracked files are seen --- is the
+subject of Section~\ref{sec:tool-modifications}, and the two are
+complementary: the platform provides the repository, and the patch makes the
+inspection correct within it.
+
+\todo[inline]{Cross-reference: the \texttt{\textbackslash ref} above assumes
+the tool-modifications section carries the label
+\texttt{sec:tool-modifications}. Add that label to
+\texttt{tool-modifications.tex}, or adjust this reference to whatever labelling
+scheme the thesis uses.}
+
+\subsubsection{Usage accounting and rate limits}
+
+Cost and token consumption are part of what a comparison between solutions
+should report, and the solution does not record them. The runner obtains them
+by wrapping the single function through which the solution reaches the model,
+accumulating the usage figures each response carries, and writing the totals
+where Harbor reads them back into its results view.
+
+Wrapping rather than editing was chosen for the same reason the previous
+section gives for keeping modifications minimal: the fewer edits the tool under
+measurement carries, the more credible the claim that what is measured is the
+tool. The wrapper observes; it does not alter the request, the response, or
+anything the solution does with either. It is also the natural place for the
+retry policy, since a rate-limited request is a property of the endpoint rather
+than of the method. The solution exhausts its own three attempts, the wrapper
+allows two further rounds with increasing backoff, and if all nine requests are
+throttled the run fails with a message that names the rate limit and the model
+rather than a generic failure to call an API.
+
+Cost is recorded only when the endpoint reports it in its usage response. Where
+it does not, the field is left empty rather than estimated from a local pricing
+table, on the grounds that an estimate drawn from a table that ages silently is
+worse than an acknowledged gap.
+
+\todo[inline]{Decide how cost enters the evaluation, if at all. If the thesis
+compares solutions on cost as well as on reward, the empty-when-unreported
+policy constrains which providers can be used for those runs, and that
+constraint belongs in the methodology.}
+
+\subsection{Provenance and Results}
+
+Harbor writes each job beneath \texttt{jobs/}, and the platform adds records of
+its own so that a job directory is self-describing. Three of them carry the
+argument.
+
+The \emph{archived configuration} is the resolved experiment setup, written
+before the run starts, with templates expanded and defaults filled in. Writing
+it up front rather than on completion is deliberate: a crashed run is precisely
+the case where one needs to know what was attempted. It names the credential's
+environment variable and never its value.
+
+The \emph{benchmark record} states the version the benchmark resolved to, the
+tasks the run selected, and the content digest of every tester image used. It
+is the evidence for the fidelity claim: it says which grader ran, not merely
+which grader was intended.
+
+The \emph{resolved setup}, written from inside the container, states what
+actually ran --- the commit of the code generation tool the container ended up
+with, the model the environment resolved to, the effective hyperparameters, and
+whether the Tester was enabled. Its purpose is to be redundant with the
+archived configuration. The configuration records intent and the resolved setup
+records observation, and a discrepancy between them is a bug the platform
+surfaces rather than conceals.
+
+Alongside these, each trial retains the generated workspace, the solution's
+console log and structured session history including each round's test result,
+and the benchmark's own verifier output with the reward. The reward is the
+fraction of the task's hidden reference tests that passed.
+
+\todo[inline]{State the metric the thesis reports and how it aggregates across
+the 104 tasks --- mean pass fraction, resolve rate at a threshold, or both ---
+and whether a single attempt per task is sufficient given a temperature of
+zero. If multiple attempts are used, say how they are combined.}
+
+\subsection{How a Task Is Graded}
+
+Each task runs two containers. In \texttt{main}, a generic Python and Node
+image, the solution generates the project under the workspace. Beside it runs a
+\texttt{tester} sidecar built from the benchmark's own evaluator image, holding
+the hidden reference tests. When the solution finishes, Harbor's verifier hook
+signals the sidecar over the shared workspace volume; the sidecar strips any
+test files the agent generated, copies the remaining code on top of its own
+reference tests, installs the package, runs the suite, and reports the passing
+fraction as the reward.
+
+Two properties of this arrangement are load-bearing. The reference tests are
+never present in the container the agent works in, so they cannot be read,
+imported, or accidentally satisfied by being overwritten --- and the sidecar's
+discarding of agent-authored test files closes the remaining route, in which a
+generated test file shadows a reference one by name. And the procedure is the
+benchmark's own upstream flow rather than a reimplementation of it, which is
+what the fidelity obligation requires: a reimplementation would be a second
+grader whose agreement with the first is an assumption.
+
+The Tester role inside the solution runs an entirely separate command, in the
+agent's own workspace, over the code and the tests the agent itself wrote. It
+is self-verification, and it has no access to and no knowledge of the grading
+path described here.
+
+\subsection{Testing the Platform}
+
+The platform carries a test suite of its own, which is worth a sentence because
+of what it covers. The tests do not exercise the code generation solution or
+the benchmark; both are dependencies with their own correctness. They cover the
+seams: that hyperparameters written in a configuration arrive as the values
+Harbor records and the runner receives, that an unknown key is rejected rather
+than dropped, that the archived setup contains no credential, that the image
+mirror pulls only images that are genuinely absent and leaves present ones
+alone, that a floating benchmark reference is pinned to what it resolved to,
+and that the runner omits the Tester exactly when no test command is
+configured.
+
+This is the appropriate target. Every one of these is a failure that would
+otherwise produce a plausible-looking number attributed to a setup that did not
+run, which is the one category of defect a comparative evaluation cannot
+tolerate.
+
+\subsection{Limitations}
+
+Three limitations follow directly from the decisions above, and are better
+stated than discovered.
+
+The platform inherits Harbor's model of a task. A benchmark that does not fit
+that model --- interactive tasks, tasks without a container, tasks whose
+grading is not the exit status of a command --- is out of reach without exactly
+the work the adoption decision was taken to avoid.
+
+The image mirror is a workaround for a defect in one benchmark's distribution.
+It is small, declarative, and recorded, but it remains a rule asserting that
+two image references denote the same image, and that assertion is checked by
+digest at run time rather than guaranteed in advance.
+
+Finally, the fidelity obligation is satisfied with respect to the benchmark's
+grading procedure, not with respect to the benchmark's intended generation
+procedure. NL2RepoBench's published results were produced by a different agent
+under that benchmark's own harness; ours are produced by a different solution
+under Harbor. The comparison the platform supports well is between solutions
+run through this platform. Comparison against externally published figures is a
+weaker claim, and should be made carefully if at all.
+
+\todo[inline]{This last limitation is the one most likely to be challenged in a
+defence. Decide the position now: either the thesis compares only solutions run
+through this platform --- in which case say so in the methodology and drop any
+table that places your numbers beside published ones --- or it makes the
+external comparison and needs a paragraph on why the difference in harness does
+not account for the gap.}
+
+\todo[inline]{Add any limitation arising from the scale actually achieved. If
+the full 104-task run was not completed, or was completed only for a subset of
+models, that constrains every claim in the results chapter and belongs here
+rather than in a footnote.}

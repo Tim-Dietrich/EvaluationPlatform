@@ -20,6 +20,7 @@ class UsageTotals:
     input_tokens: int = 0
     cached_input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0
     cost_usd: float | None = None
     responses: int = 0
 
@@ -28,6 +29,11 @@ class UsageTotals:
             "input_tokens": self.input_tokens,
             "cached_input_tokens": self.cached_input_tokens,
             "output_tokens": self.output_tokens,
+            # Reasoning tokens are billed as output tokens and included in the
+            # total above. Recording them separately shows how much of the
+            # budget a run spent thinking rather than answering, whether that
+            # was asked for or inherited from the provider's default.
+            "reasoning_tokens": self.reasoning_tokens,
             "cost_usd": self.cost_usd,
         }
 
@@ -42,9 +48,7 @@ def main() -> None:
     repo_tools_module = importlib.import_module("core.repo_tools")
 
     model_config = config_module.ModelConfig(
-        max_tokens=hyperparameters["max_tokens"],
-        temperature=hyperparameters["temperature"],
-        top_p=hyperparameters["top_p"],
+        **_model_settings(hyperparameters)
     )
     _record_resolved_setup(hyperparameters, model_config)
 
@@ -133,8 +137,10 @@ def _record_response_usage(response: Any, totals: UsageTotals) -> None:
 
     totals.input_tokens += _usage_value(usage, "prompt_tokens")
     totals.output_tokens += _usage_value(usage, "completion_tokens")
-    details = getattr(usage, "prompt_tokens_details", None)
-    totals.cached_input_tokens += _usage_value(details, "cached_tokens")
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    totals.cached_input_tokens += _usage_value(prompt_details, "cached_tokens")
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    totals.reasoning_tokens += _usage_value(completion_details, "reasoning_tokens")
     cost = getattr(usage, "cost", None)
     if isinstance(cost, (int, float)):
         totals.cost_usd = (totals.cost_usd or 0.0) + float(cost)
@@ -153,6 +159,25 @@ def _read_instruction() -> str:
     return Path(os.environ["HARBOR_TASK_INSTRUCTION_PATH"]).read_text(
         encoding="utf-8"
     )
+
+
+def _model_settings(hyperparameters: dict[str, Any]) -> dict[str, Any]:
+    """Model settings for this run, as the tool's own config accepts them.
+
+    Reasoning settings are passed only when configured, so that an unmodified
+    revision of the tool can still be pinned for a baseline comparison; asking
+    such a revision for reasoning fails loudly rather than dropping the setting.
+    """
+    settings: dict[str, Any] = {
+        "max_tokens": hyperparameters["max_tokens"],
+        "temperature": hyperparameters["temperature"],
+        "top_p": hyperparameters["top_p"],
+    }
+    if hyperparameters.get("reasoning_effort"):
+        settings["reasoning_effort"] = hyperparameters["reasoning_effort"]
+    if hyperparameters.get("request_extra"):
+        settings["extra_body"] = hyperparameters["request_extra"]
+    return settings
 
 
 def _read_hyperparameters() -> dict[str, Any]:
@@ -181,6 +206,10 @@ def _record_resolved_setup(
                 "base_url": model_config.base_url,
                 "hyperparameters": hyperparameters,
                 "tester_enabled": bool(hyperparameters.get("test_command")),
+                "reasoning_requested": bool(
+                    hyperparameters.get("reasoning_effort")
+                    or hyperparameters.get("request_extra")
+                ),
             },
             indent=2,
         ),

@@ -156,6 +156,45 @@ def test_templates_resolve_against_the_environment(tmp_path):
     assert defaulted.base_url == "https://openrouter.ai/api/v1"
 
 
+def test_reasoning_settings_are_accepted_as_hyperparameters(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.self_collaboration_agent:Agent",
+            "hyperparameters": {
+                "reasoning_effort": "high",
+                "request_extra": {"reasoning": {"effort": "high", "exclude": True}},
+            },
+        },
+    )
+
+    config = load_experiment_config(path, ENVIRONMENT)
+
+    assert config.hyperparameters["reasoning_effort"] == "high"
+    assert config.hyperparameters["request_extra"] == {
+        "reasoning": {"effort": "high", "exclude": True}
+    }
+    # Recorded with the run, so the reasoning setting is part of the setup a
+    # result can be traced back to.
+    snapshot = config.to_snapshot()["agent"]["hyperparameters"]
+    assert snapshot["reasoning_effort"] == "high"
+
+
+def test_a_request_passthrough_that_cannot_be_sent_is_rejected(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.self_collaboration_agent:Agent",
+            "hyperparameters": {"request_extra": "reasoning=high"},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "request_extra" in str(error.value)
+
+
 def test_unknown_hyperparameter_is_rejected_instead_of_silently_ignored(tmp_path):
     path = write_config(
         tmp_path,
