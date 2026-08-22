@@ -10,7 +10,7 @@ inspectable after the fact.
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -22,34 +22,168 @@ from evaluation_platform.benchmark import BenchmarkSettings, ImageMirrorRule
 
 DEFAULT_CONFIG_PATH = Path("configs/math-verify-self-collaboration.yaml")
 
-# Hyperparameters of the Self-Collaboration roles. Harbor forwards these to the
-# agent as `agents[].kwargs`, which it records in the job's `config.json`, and
-# the agent hands them to the in-container runner.
-HYPERPARAMETER_TYPES: dict[str, type] = {
-    "max_rounds": int,
-    "analyst_steps": int,
-    "coder_steps": int,
-    "max_tokens": int,
-    "temperature": float,
-    "top_p": float,
-    "test_command": str,
-    "reasoning_effort": str,
-    "request_extra": dict,
+# Each code generation solution has its own roles and its own knobs, so the
+# hyperparameters a configuration may state depend on which one it runs. A
+# solution is identified by the module of `agent.import_path`, and a
+# configuration naming an unknown one is rejected before Docker starts rather
+# than having its hyperparameters silently ignored by an agent that does not
+# know them.
+#
+# Harbor forwards the resolved values to the agent as `agents[].kwargs`, which
+# it records in the job's `config.json`, and the agent hands them to the
+# in-container runner.
+
+
+@dataclass(frozen=True)
+class AgentHyperparameters:
+    """The hyperparameters one code generation solution accepts."""
+
+    solution: str
+    types: Mapping[str, type]
+    defaults: Mapping[str, Any]
+
+    def resolve(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        """Fill in defaults, validate, and reject names the runner would ignore.
+
+        The result is the complete set of hyperparameters the run uses, so
+        what is archived and what Harbor records is the effective setup rather
+        than only the part that was written down.
+        """
+        unknown = set(values) - set(self.types)
+        if unknown:
+            raise ConfigurationError(
+                f"Unknown {self.solution} hyperparameter(s): "
+                f"{', '.join(sorted(unknown))}. Known hyperparameters: "
+                f"{', '.join(sorted(self.types))}."
+            )
+        return dict(self.defaults) | {
+            name: _coerce_hyperparameter(name, value, self.types[name])
+            for name, value in values.items()
+        }
+
+    def reject_foreign(self, names: Iterable[str]) -> None:
+        """Reject names that belong to a different solution's schema.
+
+        Harbor builds an agent from `kwargs` that carry more than
+        hyperparameters, so a name this solution does not know is not by
+        itself an error. A name another integrated solution *does* know is:
+        it was written for a different agent, and left in place it would be
+        accepted here and then quietly do nothing.
+        """
+        foreign = sorted(
+            name
+            for name in names
+            if name not in self.types
+            and any(name in other.types for other in AGENT_HYPERPARAMETERS.values())
+        )
+        if foreign:
+            raise ConfigurationError(
+                f"{', '.join(foreign)} configure a different code generation "
+                f"solution, not {self.solution}. Known {self.solution} "
+                f"hyperparameters: {', '.join(sorted(self.types))}."
+            )
+
+
+# Self-Collaboration: an Analyst, a Coder, and a Tester that runs between Coder
+# rounds. `test_command`, `reasoning_effort` and `request_extra` have no
+# defaults. Without a test command the Tester phase does not run at all;
+# without a reasoning setting the provider's own default applies. Both are
+# choices a configuration has to make deliberately, and both are recorded
+# either way.
+SELF_COLLABORATION = AgentHyperparameters(
+    solution="Self-Collaboration",
+    types={
+        "max_rounds": int,
+        "analyst_steps": int,
+        "coder_steps": int,
+        "max_tokens": int,
+        "temperature": float,
+        "top_p": float,
+        "test_command": str,
+        "reasoning_effort": str,
+        "request_extra": dict,
+    },
+    defaults={
+        "max_rounds": 3,
+        "analyst_steps": 10,
+        "coder_steps": 15,
+        "max_tokens": 8192,
+        "temperature": 0.0,
+        "top_p": 0.95,
+    },
+)
+
+# CodeTeam: competing Architects propose software design sketches, a CTO
+# selects one, Developers implement the files it names under a dependency-aware
+# scheduler, and a QA agent tests and repairs the result. The defaults are the
+# tool's own, so a configuration that states nothing runs the published setup.
+#
+# The three ablations of the paper are each one key here: `rag_enabled`,
+# `dynamic_developer_allocation`, and `git_coordination`. The two budgets and
+# the two seeds have no defaults: a budget left unset means the run is bounded
+# only by Harbor's own timeout, and a seed left unset means the architect
+# profiles and the fixed developer assignment are not pinned.
+CODE_TEAM = AgentHyperparameters(
+    solution="CodeTeam",
+    types={
+        # Planning.
+        "architects": int,
+        "architect_seed": int,
+        "sds_retry": int,
+        "preprocess_requirements": bool,
+        # Implementation.
+        "dynamic_developer_allocation": bool,
+        "fixed_developer_agents": int,
+        "developer_assignment_seed": int,
+        "git_coordination": bool,
+        # QA test-and-repair rounds after the first implementation round.
+        "max_qa_rounds": int,
+        # Retrieval grounding for the Architect stage.
+        "rag_enabled": bool,
+        "rag_backend": str,
+        "rag_top_k": int,
+        # Sampling, and the budgets that bound a run the tool would otherwise
+        # let run until Harbor's timeout.
+        "max_tokens": int,
+        "temperature": float,
+        "top_p": float,
+        "reasoning_effort": str,
+        "request_extra": dict,
+        "max_wall_clock_seconds": int,
+        "max_token_budget": int,
+    },
+    defaults={
+        "architects": 4,
+        "sds_retry": 1,
+        "preprocess_requirements": True,
+        "dynamic_developer_allocation": True,
+        "fixed_developer_agents": 4,
+        "git_coordination": True,
+        "max_qa_rounds": 2,
+        "rag_enabled": False,
+        "rag_backend": "faiss_hnsw",
+        "rag_top_k": 5,
+        "max_tokens": 8192,
+        "temperature": 0.2,
+        "top_p": 0.95,
+    },
+)
+
+AGENT_HYPERPARAMETERS: dict[str, AgentHyperparameters] = {
+    "evaluation_platform.self_collaboration_agent": SELF_COLLABORATION,
+    "evaluation_platform.code_team_agent": CODE_TEAM,
 }
 
-# Values used for hyperparameters a configuration leaves out. `test_command`,
-# `reasoning_effort` and `request_extra` have no defaults. Without a test
-# command the Tester phase does not run at all; without a reasoning setting the
-# provider's own default applies. Both are choices a configuration has to make
-# deliberately, and both are recorded either way.
-DEFAULT_HYPERPARAMETERS: dict[str, Any] = {
-    "max_rounds": 3,
-    "analyst_steps": 10,
-    "coder_steps": 15,
-    "max_tokens": 8192,
-    "temperature": 0.0,
-    "top_p": 0.95,
-}
+# The retrieval backends CodeTeam's RAG client implements. `faiss_hnsw` is the
+# paper's own path and needs the optional retrieval stack; `lexical` needs
+# nothing beyond the tool's own dependencies.
+RAG_BACKENDS = ("faiss_hnsw", "lexical")
+
+# Integer hyperparameters that are not counts. Every other one bounds a number
+# of rounds, steps, agents, or tokens, where zero means the phase does not
+# happen and a configuration should say so by leaving the key out. A seed
+# names a draw rather than bounding one, and zero is as good a seed as any.
+_SEEDS = ("architect_seed", "developer_assignment_seed")
 
 # Harbor's own default when a configuration does not set one. Named here so
 # the launcher reports the concurrency that will actually be used rather than
@@ -241,38 +375,46 @@ def load_experiment_config(
     return _build_config(document, environment, source=str(path))
 
 
-def resolve_hyperparameters(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Fill in defaults, validate, and reject names the runner would ignore.
+def agent_hyperparameters(import_path: str) -> AgentHyperparameters:
+    """The hyperparameter schema of the solution `import_path` names.
 
-    The result is the complete set of hyperparameters the run uses, so what is
-    archived and what Harbor records is the effective setup rather than only
-    the part that was written down.
+    The module is the identity: `agent.import_path` also carries the class,
+    which the tests vary, and every class in one module drives one solution.
     """
-    unknown = set(values) - set(HYPERPARAMETER_TYPES)
-    if unknown:
+    module = import_path.split(":", 1)[0]
+    try:
+        return AGENT_HYPERPARAMETERS[module]
+    except KeyError:
         raise ConfigurationError(
-            f"Unknown hyperparameter(s): {', '.join(sorted(unknown))}. "
-            f"Known hyperparameters: {', '.join(sorted(HYPERPARAMETER_TYPES))}."
-        )
-    return DEFAULT_HYPERPARAMETERS | {
-        name: _coerce_hyperparameter(name, value) for name, value in values.items()
-    }
+            f"No code generation solution is integrated as {module!r}. "
+            f"Known agent modules: {', '.join(sorted(AGENT_HYPERPARAMETERS))}."
+        ) from None
 
 
-def _coerce_hyperparameter(name: str, value: Any) -> Any:
-    expected = HYPERPARAMETER_TYPES[name]
+def _coerce_hyperparameter(name: str, value: Any, expected: type) -> Any:
+    if expected is bool:
+        if not isinstance(value, bool):
+            raise ConfigurationError(
+                f"Hyperparameter {name!r} must be true or false, got {value!r}."
+            )
+        return value
     if expected is float and isinstance(value, int) and not isinstance(value, bool):
         return float(value)
     if isinstance(value, bool) or not isinstance(value, expected):
         raise ConfigurationError(
             f"Hyperparameter {name!r} must be a {expected.__name__}, got {value!r}."
         )
-    if expected is int and value < 1:
+    if expected is int and name not in _SEEDS and value < 1:
         raise ConfigurationError(f"Hyperparameter {name!r} must be at least 1.")
     if name == "test_command" and not value.strip():
         raise ConfigurationError(
             "Hyperparameter 'test_command' must be a command; remove the key to "
             "run the Coder without the Tester."
+        )
+    if name == "rag_backend" and value not in RAG_BACKENDS:
+        raise ConfigurationError(
+            f"Hyperparameter 'rag_backend' must be one of "
+            f"{', '.join(RAG_BACKENDS)}, got {value!r}."
         )
     if expected is dict:
         try:
@@ -319,7 +461,8 @@ def _build_config(
     base_url = _require_str(model, "base_url", "'model'", source)
     _validate_endpoint(provider, base_url, source)
 
-    hyperparameters = resolve_hyperparameters(
+    import_path = _require_str(agent, "import_path", "'agent'", source)
+    hyperparameters = agent_hyperparameters(import_path).resolve(
         _require_mapping(
             agent.get("hyperparameters", {}), "'agent.hyperparameters'", source
         )
@@ -336,7 +479,7 @@ def _build_config(
         model_name=_require_str(model, "name", "'model'", source),
         base_url=base_url,
         api_key_env=api_key_env,
-        agent_import_path=_require_str(agent, "import_path", "'agent'", source),
+        agent_import_path=import_path,
         agent_n_concurrent=agent.get("n_concurrent"),
         agent_repository=agent.get("repository"),
         agent_commit=agent.get("commit"),

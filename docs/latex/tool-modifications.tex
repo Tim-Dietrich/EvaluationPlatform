@@ -3,13 +3,13 @@
 % sectioning, \texttt, \emph, itemize and verbatim, all of which are part of
 % core LaTeX. Adjust the sectioning level to taste.
 
-\section{Modifications to the Code Generation Solution}
+\section{Modifications to Self-Collaboration}
 
-The code generation solution under evaluation is Self-Collaboration, a
-multi-agent method in which three roles cooperate on a programming task: an
-\emph{Analyst}, who inspects the repository and decides what has to be written;
-a \emph{Coder}, who writes it; and a \emph{Tester}, who runs the tests and
-reports failures back to the Coder for a further round. The implementation we
+The first of the two code generation solutions under evaluation is
+Self-Collaboration, a multi-agent method in which three roles cooperate on a
+programming task: an \emph{Analyst}, who inspects the repository and decides
+what has to be written; a \emph{Coder}, who writes it; and a \emph{Tester},
+who runs the tests and reports failures back to the Coder for a further round. The implementation we
 evaluate is a fork of the authors' code, and our aim is to leave the method
 itself untouched, so that differences in measured performance are attributable
 to the method and the model rather than to our harness. Four interventions
@@ -267,3 +267,139 @@ place and compensates for it externally, and it has a side effect: once the
 files are registered, the diff shown to the Coder in subsequent rounds contains
 the entire generated project, inflating the prompt for no benefit. Correcting
 the check is both smaller and more honest.
+
+\section{Adapting CodeTeam}
+
+The second solution under evaluation is CodeTeam, a multi-agent method in which
+several \emph{Architect} agents each propose a software design sketch naming the
+file tree, the public interfaces, the dependencies between files and the
+developers the plan needs; a \emph{CTO} selects one of them and normalises it
+into a contract; \emph{Developer} agents implement the files they own under a
+dependency-aware scheduler, propagating interface changes to one another as
+commits; and a \emph{QA} agent writes throwaway tests, runs them, and hands
+failures back for repair until the repository converges or a budget is
+exhausted. Unlike the other solution, the implementation we evaluate is the
+authors' own repository at a pinned revision rather than a fork of it, for the
+reason the next paragraph gives.
+
+The account here is shorter than the preceding one, and for a reason worth
+stating. The assumption that made three source changes necessary for
+Self-Collaboration --- that a repository already exists, and that the work done
+to it is visible as a diff --- does not arise here, because CodeTeam was written
+for exactly this class of task: an empty workspace and a requirements document
+from which a whole project must be produced. No file of CodeTeam is modified.
+What this project supplies is an entry point and an instrument around it, and we
+report those for the same reason we report the others.
+
+\subsection{Where the Generated Repository Is Written}
+
+CodeTeam's own entry point generates into a fresh directory named for the time
+the run started, one level below its workspace. That suits a local run keeping
+its attempts side by side. It does not suit this harness, because the directory
+Harbor grades is the workspace itself: once the agent finishes, the task's
+verifier copies what it finds at \texttt{/workspace} on top of the benchmark's
+reference tests. Generated one level down, the entire project would be invisible
+to the grader, which would score an empty repository.
+
+The location is decided by a single method on the tool's context object, which
+we override to return the workspace. Nothing else about the workflow changes.
+The obvious alternative --- let the tool generate where it prefers and move the
+result afterwards --- was rejected because the tool initialises a Git repository
+at that root and commits to it as the developers work, so a move would either
+carry that history to a location the tool never knew about or discard the record
+of how the repository was assembled.
+
+\subsection{Where the Tool's Own Record Is Written}
+
+The same argument applies to a second directory. CodeTeam records what it did
+--- every architect's candidate design, the CTO's choice and its rationale, the
+normalised plan, and the result of each QA round --- beneath its workspace as
+well. Under the arrangement above that places them inside the repository being
+graded, where the verifier would copy them onto the benchmark's tests as though
+they were part of the library under construction.
+
+We direct them to the job's log directory instead, alongside the run's console
+output. The alternative of switching the tool's artefacts off would remove the
+problem and the evidence together, and the planning record is the part of this
+method most worth having: it is the only place the designs that were rejected
+can be read.
+
+\subsection{Sampling and Reasoning Parameters}
+
+The argument of the corresponding section above applies here too, and is
+narrower in scope.
+
+The inconsistency found in the other solution does not exist in this one. Every
+request CodeTeam sends carries \texttt{temperature}, \texttt{top\_p} and
+\texttt{max\_tokens} from one configuration object, on every path.
+
+Two gaps remain. The first is that \texttt{temperature} has no environment
+override, although the settings beside it do, so a run configured from outside
+the tool could not fix its own sampling; this is among the reasons our runner
+assembles the tool's configuration object directly rather than setting
+environment variables and calling its entry point. The second is that no
+reasoning field is ever sent. As before, the consequence is that the amount of
+reasoning a run performs is whatever the provider happens to default to for that
+model at that moment: a quantity set outside the experiment, absent from its
+record, free to change between runs, and drawn from the same output budget as
+the answer.
+
+We add both by wrapping the single client method through which every one of the
+tool's requests passes. \texttt{reasoning\_effort} carries the OpenAI-compatible
+field of that name, and \texttt{extra\_body} carries provider-specific request
+fields verbatim, which accommodates interfaces that express reasoning
+differently. Both are omitted when unset, so a configuration that says nothing
+about reasoning produces exactly the request the tool would have sent. The
+tool's own request construction, its retries, and its JSON repair loop are
+untouched.
+
+\subsection{Usage and Rate Limits}
+
+CodeTeam records one number about what it spends: a running total of total
+tokens, which it consults only to enforce its own token budget. That is not
+enough to report uncached input, cached input, output and reasoning tokens
+separately, and those separations are what a comparison of cost between two
+solutions rests on --- cached input is not priced as input, and reasoning tokens
+are billed as output while forming no part of the answer.
+
+The same wrapper therefore accumulates the usage each response reports, through
+the same accounting the other solution uses. This is deliberately one
+implementation rather than two: a token, a cached token and a dollar must mean
+the same thing on both sides of a comparison, and two independent
+implementations of that is how they quietly stop doing so.
+
+The wrapper also waits out a throttled request. CodeTeam retries three times on
+the path that returns free text and not at all on the path that returns JSON,
+which is the majority of its calls, so a free model briefly out of capacity
+would otherwise cost the trial. If every attempt is refused, the failure names
+the rate limit and the model rather than surfacing as a JSON parsing error
+several frames away.
+
+\subsection{Budgets}
+
+CodeTeam implements a wall-clock budget and a token budget and checks both
+between stages. Neither is set by default. Left unset, the only bound on a task
+is Harbor's own agent timeout, which is reached without anything having been
+recorded about which stage was running or how much had been spent to get there.
+
+Unlike the preceding subsections, this is a matter of configuration rather than
+of implementation, as enabling Self-Collaboration's Tester was: we set both
+values in the experiment configuration, where they are recorded with the run and
+can be varied. It matters more here than it would for the other solution,
+because CodeTeam has no fixed number of model calls. The width of the architect
+search, the number of files the selected design names, and the number of QA
+repair rounds each multiply what a task costs, and the second of those is chosen
+by the model rather than by the configuration.
+
+\subsection{Scope of the Intervention}
+
+No file of CodeTeam is modified. The roles, their prompts, the order in which
+they run, the scheduler, the Git-based coordination and the QA loop are the
+published ones, and the revision evaluated is upstream's, pinned with the run
+and recorded alongside its results. What this project adds surrounds the method
+rather than entering it: where the finished repository is written, where the
+tool's own record is written, which fields the request carries, what is counted,
+and what bounds the run. The three components the paper ablates --- retrieval
+grounding, dynamic developer allocation, and Git-based coordination --- are
+exposed as settings of the experiment configuration, each recorded with the run
+it produced.

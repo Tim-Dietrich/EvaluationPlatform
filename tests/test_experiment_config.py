@@ -378,3 +378,119 @@ def test_the_benchmark_configuration_runs_its_tasks_in_parallel():
 
     assert config.run["n_concurrent_trials"] > 1
     assert config.run["retry"]["max_retries"] >= 1
+
+
+def test_the_two_solutions_are_compared_on_the_same_benchmark_and_model():
+    """What makes the pair of math-verify configurations a comparison.
+
+    The benchmark and the model decide what the run is measured against
+    rather than what is being measured. Where those differ, a difference in
+    the result is no longer attributable to the solution. `run` is excluded
+    deliberately: how many attempts to make and how many to run at once is how
+    much of the experiment to do, not what the experiment is, and the two
+    files are expected to differ there while one of them is being iterated on.
+    """
+    self_collaboration = yaml.safe_load(
+        (ROOT / "configs" / "math-verify-self-collaboration.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    code_team = yaml.safe_load(
+        (ROOT / "configs" / "math-verify-codeteam.yaml").read_text(encoding="utf-8")
+    )
+
+    assert code_team["benchmark"] == self_collaboration["benchmark"]
+    assert code_team["model"] == self_collaboration["model"]
+
+
+def test_the_shipped_codeteam_configuration_resolves_to_a_complete_setup():
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-codeteam.yaml", ENVIRONMENT
+    )
+
+    hyperparameters = config.hyperparameters
+    assert config.agent_import_path.startswith("evaluation_platform.code_team_agent")
+    # The QA role tests and repairs between rounds, so a run with none of them
+    # is planning and implementation with nothing verifying the result.
+    assert hyperparameters["max_qa_rounds"] >= 1
+    assert hyperparameters["architects"] >= 1
+    # Sampling matches the Self-Collaboration configuration rather than the
+    # tool's own default, so the comparison is not also one of temperature.
+    assert hyperparameters["temperature"] == 0.0
+    # A budget, because the tool has no bound of its own on what a task costs.
+    assert hyperparameters["max_wall_clock_seconds"] >= 1
+    assert hyperparameters["max_token_budget"] >= 1
+
+
+def test_hyperparameters_are_validated_against_the_solution_that_will_run(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.code_team_agent:CodeTeamAgent",
+            # Self-Collaboration's Coder budget, which CodeTeam has no role for.
+            "hyperparameters": {"coder_steps": 15},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "coder_steps" in str(error.value)
+    assert "CodeTeam" in str(error.value)
+
+
+def test_a_configuration_naming_an_unintegrated_solution_is_rejected(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.metagpt_agent:MetaGPTAgent",
+            "hyperparameters": {},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "metagpt_agent" in str(error.value)
+    assert "evaluation_platform.code_team_agent" in str(error.value)
+
+
+def test_an_ablation_is_a_boolean_a_configuration_states_rather_than_a_string(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.code_team_agent:CodeTeamAgent",
+            "hyperparameters": {"git_coordination": "off"},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "git_coordination" in str(error.value)
+
+
+def test_a_seed_of_zero_is_a_seed_rather_than_an_empty_budget(tmp_path):
+    """Zero bounds nothing here; it names one draw among many."""
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.code_team_agent:CodeTeamAgent",
+            "hyperparameters": {"architect_seed": 0, "architects": 2},
+        },
+    )
+
+    config = load_experiment_config(path, ENVIRONMENT)
+
+    assert config.hyperparameters["architect_seed"] == 0
+    with pytest.raises(ConfigurationError):
+        load_experiment_config(
+            write_config(
+                tmp_path,
+                agent={
+                    "import_path": "evaluation_platform.code_team_agent:CodeTeamAgent",
+                    "hyperparameters": {"architects": 0},
+                },
+            ),
+            ENVIRONMENT,
+        )

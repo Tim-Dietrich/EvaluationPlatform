@@ -19,12 +19,11 @@ from evaluation_platform.self_collaboration_agent import (
     SelfCollaborationAgent,
 )
 from evaluation_platform import run_self_collaboration
+from evaluation_platform.model_usage import UsageTotals, record_response_usage
 from evaluation_platform.run_self_collaboration import (
-    UsageTotals,
     _model_settings,
     _read_instruction,
     _usage_recording_call,
-    _record_response_usage,
 )
 
 
@@ -337,8 +336,8 @@ def test_record_response_usage_aggregates_openrouter_metrics():
         )
     )
 
-    _record_response_usage(first_response, totals)
-    _record_response_usage(second_response, totals)
+    record_response_usage(first_response, totals)
+    record_response_usage(second_response, totals)
 
     assert totals.to_dict() == {
         "input_tokens": 200,
@@ -354,7 +353,7 @@ def test_record_response_usage_aggregates_openrouter_metrics():
 def test_usage_without_reasoning_details_records_no_reasoning_tokens():
     totals = UsageTotals()
 
-    _record_response_usage(
+    record_response_usage(
         SimpleNamespace(
             usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5)
         ),
@@ -459,3 +458,16 @@ def test_post_run_populates_harbor_context_from_usage_log(tmp_path):
     assert context.n_cache_tokens == 15
     assert context.n_output_tokens == 25
     assert context.cost_usd == 0.0
+
+
+def test_an_unreadable_tool_repository_fails_instead_of_waiting_for_a_password(tmp_path):
+    """A private or misspelled repository is a fast failure, not a stalled trial."""
+    environment = RecordingEnvironment()
+    agent = SelfCollaborationAgent(logs_dir=tmp_path)
+
+    asyncio.run(agent.install(cast(BaseEnvironment, cast(object, environment))))
+
+    clone = next(
+        command for command in environment.commands if "git clone" in command["command"]
+    )
+    assert clone["env"]["GIT_TERMINAL_PROMPT"] == "0"

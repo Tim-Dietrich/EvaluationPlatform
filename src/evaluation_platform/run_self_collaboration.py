@@ -4,38 +4,21 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+# The runner is uploaded next to its own dependencies, so its directory carries
+# the shared usage accounting under a flat name. On the host, where the tests
+# import this module from the package, that same directory is the package.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from model_usage import UsageTotals, record_response_usage  # noqa: E402
 
 SELF_COLLABORATION_ROOT = Path("/installed-agent/self-collaboration")
 WORKSPACE = Path("/workspace")
 HISTORY_PATH = Path("/logs/agent/session-history.json")
 USAGE_PATH = Path("/logs/agent/model-usage.json")
 RESOLVED_SETUP_PATH = Path("/logs/agent/resolved-setup.json")
-
-
-@dataclass
-class UsageTotals:
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    output_tokens: int = 0
-    reasoning_tokens: int = 0
-    cost_usd: float | None = None
-    responses: int = 0
-
-    def to_dict(self) -> dict[str, int | float | None]:
-        return {
-            "input_tokens": self.input_tokens,
-            "cached_input_tokens": self.cached_input_tokens,
-            "output_tokens": self.output_tokens,
-            # Reasoning tokens are billed as output tokens and included in the
-            # total above. Recording them separately shows how much of the
-            # budget a run spent thinking rather than answering, whether that
-            # was asked for or inherited from the provider's default.
-            "reasoning_tokens": self.reasoning_tokens,
-            "cost_usd": self.cost_usd,
-        }
 
 
 def main() -> None:
@@ -112,7 +95,7 @@ def _usage_recording_call(
         for attempt in range(3):
             try:
                 response = call(*args, **kwargs)
-                _record_response_usage(response, totals)
+                record_response_usage(response, totals)
                 return response
             except RuntimeError as error:
                 if str(error) != "Failed to call LLM API with tools":
@@ -128,31 +111,6 @@ def _usage_recording_call(
         raise AssertionError("unreachable")
 
     return wrapped
-
-
-def _record_response_usage(response: Any, totals: UsageTotals) -> None:
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return
-
-    totals.input_tokens += _usage_value(usage, "prompt_tokens")
-    totals.output_tokens += _usage_value(usage, "completion_tokens")
-    prompt_details = getattr(usage, "prompt_tokens_details", None)
-    totals.cached_input_tokens += _usage_value(prompt_details, "cached_tokens")
-    completion_details = getattr(usage, "completion_tokens_details", None)
-    totals.reasoning_tokens += _usage_value(completion_details, "reasoning_tokens")
-    cost = getattr(usage, "cost", None)
-    if isinstance(cost, (int, float)):
-        totals.cost_usd = (totals.cost_usd or 0.0) + float(cost)
-    totals.responses += 1
-
-
-def _usage_value(container: Any, key: str) -> int:
-    if isinstance(container, dict):
-        value = container.get(key)
-    else:
-        value = getattr(container, key, None)
-    return value if isinstance(value, int) else 0
 
 
 def _read_instruction() -> str:

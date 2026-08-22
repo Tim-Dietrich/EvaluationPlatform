@@ -1,3 +1,6 @@
 [submodule "code_generation/Self-collaboration-Code-Generation"]
 	path = code_generation/Self-collaboration-Code-Generation
 	url = https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation
+[submodule "code_generation/CodeTeam"]
+	path = code_generation/CodeTeam
+	url = https://github.com/WhitenWhiten/CodeTeam.git

@@ -1,0 +1,143 @@
+# Experiment setup: one CodeTeam attempt on a single NL2RepoBench task.
+#
+# This is the second code generation solution evaluated in this repository, and
+# it is deliberately the counterpart of `math-verify-self-collaboration.yaml`:
+# the same benchmark, the same task, the same model backend. The `benchmark`
+# and `model` blocks are byte-identical to that file, so a difference between
+# the two runs is a difference between the two solutions rather than between
+# two setups. The `run` block is the exception, and is not part of that claim:
+# how many attempts to make and how many to run at once is how much of the
+# experiment to do rather than what it measures. Raise both to compare
+# results; one of each is the cheapest way to check that a run works at all.
+#
+# Everything that changes what a run does belongs in a file under `configs/`.
+# Launch it with `python main.py --config configs/math-verify-codeteam.yaml`;
+# the launcher archives the resolved setup as
+# `jobs/<job>/experiment-config.yaml`, so any recorded result can be traced
+# back to the configuration that produced it. `.env` holds credentials only.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: math-verify-codeteam
+description: >-
+  CodeTeam (Architects -> CTO -> Developers <-> QA) generates the math-verify
+  library from NL2RepoBench's natural-language specification. The hidden
+  reference tests stay in the tester sidecar and are never visible to the
+  agent; the reward is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 4
+  n_concurrent_trials: 4
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+
+agent:
+  import_path: evaluation_platform.code_team_agent:CodeTeamAgent
+  n_concurrent: 4
+  # The revision of the code generation tool under evaluation. Pinning it here
+  # keeps the tool's version part of the recorded setup. Nothing in CodeTeam is
+  # modified for this project — what is supplied around it is described in
+  # docs/latex/tool-modifications.tex — so this names the authors' repository
+  # rather than a fork of it. A fork is one line here once there is something
+  # in it, and it has to be readable without credentials: the task container
+  # has none, and a private repository fails the clone rather than the run.
+  repository: https://github.com/WhitenWhiten/CodeTeam.git
+  commit: c095631730bf669c9c9ef1a0e87739e18caf6a7c
+  hyperparameters:
+    # Planning. Architects propose competing software design sketches and the
+    # CTO selects one, so this is the width of the search over designs, and it
+    # is paid for once per task before any code is written. Four is the tool's
+    # own default and the paper's setting.
+    architects: 4
+    # Pinned so that the architect profiles — the design preference each one
+    # is given — are the same on every attempt of this configuration. Left
+    # unset they are drawn afresh, which is a difference between attempts that
+    # the record would not show.
+    architect_seed: 0
+    # How many further tries an architect gets when its sketch does not parse
+    # or does not satisfy the schema.
+    sds_retry: 3
+    # Strip badges, changelogs, and license sections out of the task's README
+    # before planning. This is the benchmark's document-only setting: the
+    # agent sees the specification and nothing else either way.
+    preprocess_requirements: true
+
+    # Implementation. With dynamic allocation the selected design decides how
+    # many developers there are and which files each one owns; without it the
+    # files are dealt round-robin to a fixed number. The two together are the
+    # paper's `w/o dynamic` ablation, which is `false` here plus the count
+    # below.
+    dynamic_developer_allocation: true
+    fixed_developer_agents: 4
+    developer_assignment_seed: 0
+    # Developers propagate interface changes to each other as Git commits
+    # carrying a structured update reason. Set to `false` for the paper's
+    # `w/o Git` ablation, which leaves them with no view of each other's work.
+    git_coordination: true
+
+    # QA test-and-repair rounds after the first implementation round. QA
+    # writes its own throwaway tests, runs them in the workspace, and hands
+    # failures back to the developers who own the files. The tests it writes
+    # are removed before the repository is returned, and the benchmark's
+    # reference tests live in the tester sidecar and stay hidden either way.
+    # Two is the tool's own default.
+    max_qa_rounds: 2
+
+    # Retrieval grounding for the Architect stage. The paper's full setting
+    # enables it, and `false` is its `w/o RAG` ablation; it is off here
+    # because the vector backend downloads an embedding model at first use
+    # inside the task container, which is a dependency a smoke-test run should
+    # not carry. Turning it on installs the retrieval stack for the run;
+    # `rag_backend: lexical` grounds from the same corpus without it.
+    rag_enabled: false
+    rag_backend: faiss_hnsw
+    rag_top_k: 5
+
+    # Sampling. `temperature: 0.0` matches the Self-Collaboration
+    # configuration rather than CodeTeam's own default of 0.2, so that the
+    # comparison between the two solutions is not also a comparison between
+    # two sampling settings.
+    max_tokens: 16000
+    temperature: 0.2
+    top_p: 0.95
+    # Reasoning, pinned rather than inherited, exactly as in the
+    # Self-Collaboration configuration. CodeTeam sends no reasoning setting of
+    # its own, so without this the amount of reasoning is whatever the
+    # provider defaults to for the model at that moment — invisible in the
+    # record and free to change between runs. `request_extra` is merged into
+    # the request body verbatim, so it carries OpenRouter's `reasoning` object
+    # as well as other providers' shapes; the OpenAI-compatible
+    # `reasoning_effort` field is available as a hyperparameter of its own.
+    # What actually happened is recorded as `reasoning_tokens` in the run's
+    # model usage.
+    request_extra:
+      reasoning:
+        enabled: false
+
+    # Budgets. CodeTeam has no bound of its own on how long a task may take or
+    # how many tokens it may spend: architects, developers, and QA rounds each
+    # cost what they cost, and a design that names many files costs more than
+    # one that names few. Without a budget the only limit is the task's own
+    # agent timeout, and a trial that reaches that is scored as an error with
+    # nothing to show. These stop the run first and leave the workspace as it
+    # stood, which the verifier can still grade.
+    max_wall_clock_seconds: 3600
+    max_token_budget: 2000000

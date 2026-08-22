@@ -35,17 +35,29 @@ py -3.13 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[test]"
 ```
 
-The Self-Collaboration submodule is checked out for reading and reference. The
-run itself does not use the working copy: the agent clones the revision named
-in the experiment configuration into the task container.
+Each code generation solution under evaluation is checked out beneath
+`code_generation/` as a submodule, for reading and reference:
+
+```powershell
+git submodule update --init
+```
+
+A run does not use these working copies: the agent clones the revision named in
+the experiment configuration into the task container, so a clone without them
+still runs.
 
 ## Experiment configurations
 
 `configs/` is the home for run setup. One file describes one experiment: the
-benchmark and task selection, the model backend, the revision of the code
-generation tool, and the hyperparameters its Analyst, Coder, and Tester roles
-receive. Nothing that
+benchmark and task selection, the model backend, the code generation solution
+and the revision of it, and the hyperparameters its roles receive. Nothing that
 changes what a run does lives outside it — `.env` holds credentials only.
+
+Which hyperparameters a file may state depends on the solution it names.
+`agent.import_path` selects it, and each solution declares its own set: a name
+belonging to a different one, or to none, is rejected with the known names
+listed rather than accepted and then ignored by an agent that has no use for
+it.
 
 Copy the tracked template and set `API_KEY` to your credential. The local
 `.env` file is ignored by Git:
@@ -84,10 +96,9 @@ BASE_URL=https://api.deepseek.com
 
 `MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
 DeepSeek also accepts `https://api.deepseek.com/v1`. Free OpenRouter models can
-be temporarily rate-limited even with a valid key. The adapter waits and
-retries two additional times after Self-Collaboration exhausts its initial
-three requests; if all nine requests are throttled, the job log reports the
-rate limit and affected model explicitly.
+be temporarily rate-limited even with a valid key. The adapter waits and retries
+after the tool has exhausted its own attempts; if every one is throttled, the
+job log reports the rate limit and the affected model explicitly.
 
 ## Benchmarks
 
@@ -118,8 +129,12 @@ about scope. `configs/nl2repobench-self-collaboration.yaml` runs all 104 tasks;
 `configs/math-verify-self-collaboration.yaml` is the same setup narrowed to one
 task for iterating cheaply.
 
-To compare a second code generation solution, copy a configuration, change only
-the `agent` section, and leave the `benchmark` block byte-identical.
+Comparing a second code generation solution means copying a configuration,
+changing only the `agent` section, and leaving everything else byte-identical.
+`configs/math-verify-codeteam.yaml` is that: the same task, the same pinned
+benchmark version, and the same model as the Self-Collaboration configuration
+beside it, given to CodeTeam instead. A test asserts that those blocks agree,
+since that agreement is the entire basis for comparing their results.
 
 A configuration may instead point at a single local task directory with
 `task: {path: ...}`, for a task authored by hand rather than taken from a
@@ -197,12 +212,20 @@ A job is resumable once Harbor has written its `config.json`. A run that failed
 before that point — a configuration error, an unreachable image — has to be
 launched again.
 
-## The three roles
+## The code generation solutions
 
-Self-Collaboration is a team of three: the Analyst localizes the work, the
-Coder writes it, and the Tester runs the tests and reports failures back to the
-Coder for the next round. The Tester runs *between* Coder rounds, so it needs
-both halves of its setup to exist:
+Two are integrated. Each is a multi-agent method that receives the task's
+natural-language specification and an empty workspace, and each is driven by
+an adapter in `src/evaluation_platform/` that installs the tool in the task
+container, hands it the specification and the configured hyperparameters, and
+records what it spent. Neither adapter changes how the method works.
+
+### Self-Collaboration
+
+A team of three: the Analyst localizes the work, the Coder writes it, and the
+Tester runs the tests and reports failures back to the Coder for the next
+round. The Tester runs *between* Coder rounds, so it needs both halves of its
+setup to exist:
 
 - `test_command` — what it runs in the agent's workspace. Without it the
   session degrades to Analyst followed by a single Coder pass.
@@ -211,6 +234,40 @@ both halves of its setup to exist:
 
 The Tester only ever runs the code and tests the agent wrote itself. A task's
 reference tests stay in its tester sidecar and are never visible to the agent.
+
+### CodeTeam
+
+A team of four kinds. `architects` Architects each propose a software design
+sketch — the file tree, the public interfaces, the dependencies between files,
+and how many Developers the plan needs — a CTO selects one and normalizes it,
+the Developers implement the files they own under a dependency-aware scheduler,
+and a QA agent tests the result and hands failures back for repair for up to
+`max_qa_rounds` rounds.
+
+Three keys are the ablations the paper reports, each isolating one component:
+
+- `rag_enabled` — whether the Architects are grounded with design references
+  retrieved from a corpus of public repositories. Off by default here, because
+  the paper's vector backend downloads an embedding model at first use inside
+  the task container; `rag_backend: lexical` grounds from the same corpus
+  without that dependency, and the retrieval stack is installed only for a run
+  that asks for it.
+- `dynamic_developer_allocation` — whether the selected design decides the
+  number of Developers and who owns which file, or the files are dealt
+  round-robin to `fixed_developer_agents` of them.
+- `git_coordination` — whether Developers propagate interface changes to each
+  other as commits carrying a structured update reason.
+
+QA writes its own throwaway tests, runs them in the workspace, and deletes
+them before the repository is returned; as with Self-Collaboration's Tester,
+the benchmark's reference tests stay in the sidecar and are never visible.
+
+Unlike Self-Collaboration, CodeTeam has no bound of its own on what a task may
+cost: the width of the architect search, the number of files the chosen design
+names, and the QA rounds each cost what they cost. `max_wall_clock_seconds`
+and `max_token_budget` are the bound. Reaching either stops the run and is
+recorded as a failed agent run, and Harbor still grades whatever the workspace
+holds at that point.
 
 ## Results and provenance
 
@@ -226,10 +283,16 @@ run keeps the setup that produced it:
   passed to the agent.
 - `<trial>/agent/resolved-setup.json`: what actually ran in the container —
   the commit of the code generation tool, the resolved model, the
-  hyperparameters, and whether the Tester was enabled.
+  hyperparameters, and whether the phases that a configuration can switch off
+  were in fact on.
 - `<trial>/artifacts/workspace/`: the generated workspace.
-- `<trial>/agent/`: Self-Collaboration console log and structured session
-  history, including each round's test result.
+- `<trial>/agent/`: the solution's console log, plus what it recorded about its
+  own reasoning. Self-Collaboration writes `session-history.json`, the
+  structured session including each round's test result; CodeTeam writes
+  `codeteam/`, holding every architect's candidate design, the CTO's choice and
+  its rationale, the normalized plan, and the result of each QA round. These
+  are kept out of the workspace deliberately: they are evidence about the run,
+  not part of the repository being graded.
 - `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
   fraction of the task's reference tests that passed, consumed by Harbor.
 
@@ -246,7 +309,8 @@ show jobs created in this repository until it is restarted with the path above.
 
 The Harbor results view records the provider, model, and dataset label for each
 run, and aggregates uncached input, cached input, and output tokens across
-every Self-Collaboration model call. Cost is recorded when the
+every model call a run made. Both solutions report this through the same
+accounting, so the totals mean the same thing for each. Cost is recorded when the
 OpenAI-compatible API includes a `cost` value in its usage response; otherwise
 Harbor leaves Cost USD empty rather than estimating it from a potentially stale
 pricing table. These fields apply to new runs and do not retrofit existing job
