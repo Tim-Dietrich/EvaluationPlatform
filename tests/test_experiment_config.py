@@ -299,3 +299,82 @@ def test_readme_runs_harbor_through_the_configuration_launcher():
     assert ".venv\\Scripts\\python.exe main.py" in readme
     assert "--env-file" not in readme
     assert "harbor.exe view .\\jobs --jobs" in readme
+
+
+def test_concurrency_and_resilience_settings_reach_harbor(tmp_path):
+    """The knobs that make a benchmark-scale run finish are part of the setup.
+
+    Concurrency, retries, and resource overrides all change what a run does,
+    so they belong in the configuration and in its archived snapshot rather
+    than in a command line that leaves no record.
+    """
+    path = write_config(
+        tmp_path,
+        run={
+            "jobs_dir": "jobs",
+            "n_attempts": 1,
+            "n_concurrent_trials": 6,
+            "retry": {"max_retries": 2, "min_wait_sec": 5},
+            "environment": {"override_memory_mb": 3072},
+        },
+    )
+
+    config = load_experiment_config(path, ENVIRONMENT)
+    harbor_config = config.to_harbor_config("2026-01-01__00-00-00")
+
+    assert harbor_config["n_concurrent_trials"] == 6
+    assert harbor_config["retry"] == {"max_retries": 2, "min_wait_sec": 5}
+    assert harbor_config["environment"] == {"override_memory_mb": 3072}
+    assert config.to_snapshot()["run"]["n_concurrent_trials"] == 6
+
+
+def test_a_misspelled_retry_setting_is_rejected_rather_than_ignored(tmp_path):
+    path = write_config(
+        tmp_path,
+        run={"jobs_dir": "jobs", "retry": {"max_retry": 2}},
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "run.retry" in str(error.value)
+    assert "max_retries" in str(error.value)
+
+
+def test_agent_concurrency_above_the_trial_limit_is_rejected(tmp_path):
+    """`agent.n_concurrent` is a sub-limit, so it can never be the larger.
+
+    Raising one without the other is the natural mistake when scaling a
+    configuration up, and Harbor would otherwise reject it only once the run
+    had already been launched.
+    """
+    path = write_config(
+        tmp_path,
+        run={"jobs_dir": "jobs", "n_concurrent_trials": 4},
+        agent={
+            "import_path": "evaluation_platform.self_collaboration_agent:Agent",
+            "n_concurrent": 8,
+            "hyperparameters": {"max_rounds": 2},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "n_concurrent" in str(error.value)
+    assert "rate limit" in str(error.value)
+
+
+def test_the_benchmark_configuration_runs_its_tasks_in_parallel():
+    """The whole-benchmark configuration is the one that has to scale.
+
+    104 tasks at roughly six minutes each is about ten hours in sequence, so a
+    concurrency of one here would make the configuration unusable for its
+    stated purpose.
+    """
+    config = load_experiment_config(
+        ROOT / "configs" / "nl2repobench-self-collaboration.yaml", ENVIRONMENT
+    )
+
+    assert config.run["n_concurrent_trials"] > 1
+    assert config.run["retry"]["max_retries"] >= 1

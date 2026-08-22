@@ -12,11 +12,20 @@ a \emph{Coder}, who writes it; and a \emph{Tester}, who runs the tests and
 reports failures back to the Coder for a further round. The implementation we
 evaluate is a fork of the authors' code, and our aim is to leave the method
 itself untouched, so that differences in measured performance are attributable
-to the method and the model rather than to our harness. Three interventions
+to the method and the model rather than to our harness. Four interventions
 were nevertheless necessary before the method could run as described and be
 compared across configurations. The first is a matter of configuration. The
-remaining two are changes to the implementation, and are the reason this
+remaining three are changes to the implementation, and are the reason this
 section exists at all.
+
+A common cause underlies most of them. The implementation was written for
+repair tasks, where an existing repository is modified under version control,
+and it uses the resulting diff as its evidence that anything happened. The
+tasks in this work are the opposite: an empty workspace and a specification
+from which an entire project must be written. Nothing the agent produces is
+tracked, so every mechanism that reads a diff reads nothing, and each such
+mechanism fails in a different way. What we changed is the harness's reading
+of the repository, never the roles or what they are asked to do.
 
 The exact revision of the solution used in every run is recorded with the run
 itself, so that any reported result can be traced to the code that produced it.
@@ -124,6 +133,49 @@ generation tasks. The separate diff that is shown back to the Coder as a record
 of its previous attempt is deliberately left as \texttt{git diff}, since that
 value is genuinely required to be a diff.
 
+\subsection{Context Between Coder Rounds}
+
+The third intervention follows from the same assumption as the second, in a
+different place.
+
+Each Coder round begins a fresh conversation. What an earlier round did
+reaches a later one only through a summary that the session assembles, built
+from four parts: the report from the Tester, the diff of the previous attempt,
+a record of the edits it made, and the file contents the Analyst read while
+localising the work. On a repair task the diff alone carries the entire
+attempt forward, and the arrangement is sound.
+
+On a task built from scratch, three of those four parts are empty. The diff is
+empty because nothing is tracked. The record of edits is empty because it is
+derived from calls to the editing action, and a Coder writing whole files uses
+the shell instead. The Analyst's file contents are empty because the Analyst
+explored a workspace that did not yet contain anything. What remains is the
+plan, the original specification, a test report, and an instruction stating
+that the previous attempt was incorrect. A later round therefore rediscovers
+its own work from scratch, while being told that work was wrong.
+
+The effect is measurable. In a run of three rounds the Coder exhausted its
+step budget in every one, consumed roughly two and a half times the input
+tokens of an earlier single-round run of the same task, and produced strictly
+less: the central module of the library was absent, and the benchmark score
+fell from 0.505 to zero. Three restarts accomplished less than one
+uninterrupted attempt. Other variables differed between those two runs, so
+this is not a controlled comparison; the mechanism, however, is visible
+directly in the assembled prompt.
+
+We therefore give a later round an inventory of the workspace whenever the
+diff is empty, listing the files that exist as
+\texttt{\#\# Files already in the workspace}. The listing must be requested with
+\texttt{--untracked-files=all}, since the default collapses an untracked
+directory to its name and hides the files inside it, and it is capped so that
+a single large generated directory cannot crowd out the rest of the prompt.
+Where a diff exists the listing is suppressed and the prompt is assembled
+exactly as before, so behaviour on repair tasks is unchanged.
+
+This supplies information that the original design obtained from the diff. It
+adds no instruction, grants no capability, and leaves the role prompts as
+published.
+
 \subsection{Sampling and Reasoning Parameters}
 
 Every model call made by the Analyst and the Coder passes through a single
@@ -184,22 +236,27 @@ that were counted only in their output total, and cannot now be separated.
 
 \subsection{Scope of the Intervention}
 
-Both changes are confined to the harness that surrounds the roles: one to how
-it inspects the repository, one to how it constructs a request. The three role
-prompts, the tools available to each role, the structure of the session loop,
-the order in which the roles run, and the information passed between them are
+All three changes are confined to the harness that surrounds the roles: how it
+inspects the repository, what it carries between rounds, and how it constructs
+a request. The three role prompts, the tools available to each role, the
+structure of the session loop and the order in which the roles run are
 unmodified. No step was added to any role's instructions, and no role was given
-a capability it did not previously have.
+a capability it did not previously have. The evaluated system is accordingly a
+modified implementation rather than the published one, and we describe it as
+such: the modifications adapt an implementation written for repair tasks to
+tasks that begin from nothing, and none of them changes the method.
 
 We nonetheless report them, rather than treating them as implementation
 details, for two reasons. They are modifications to the system under
 measurement, which should be disclosed on principle. And their practical effect
 is not negligible. Without the first, the Tester role, though executed,
 contributes no usable information, so a comparison drawn against the
-unmodified implementation on this class of task would in effect be a comparison
-against a two-role method. Without the second, two runs of the same written
-configuration are not guaranteed to have used the same sampling or the same
-amount of reasoning, which is the property a controlled comparison depends on.
+unmodified implementation on this class of task would in effect be a
+comparison against a two-role method. Without the second, the rounds after the
+first are largely wasted, and additional rounds make the outcome worse rather
+than better. Without the third, two runs of the same written configuration are
+not guaranteed to have used the same sampling or the same amount of reasoning,
+which is the property a controlled comparison depends on.
 
 A pre-existing alternative deserves mention, since it was our first approach.
 The same effect can be obtained without touching the implementation, by having

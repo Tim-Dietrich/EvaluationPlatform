@@ -51,6 +51,11 @@ DEFAULT_HYPERPARAMETERS: dict[str, Any] = {
     "top_p": 0.95,
 }
 
+# Harbor's own default when a configuration does not set one. Named here so
+# the launcher reports the concurrency that will actually be used rather than
+# staying silent about a figure nobody wrote down.
+DEFAULT_N_CONCURRENT_TRIALS = 4
+
 _TOP_LEVEL_KEYS = {
     "name",
     "description",
@@ -60,7 +65,41 @@ _TOP_LEVEL_KEYS = {
     "model",
     "agent",
 }
-_RUN_KEYS = {"jobs_dir", "n_attempts", "n_concurrent_trials", "artifacts"}
+# The `run` block is Harbor's own job configuration, narrowed to the keys this
+# project has a use for. Beyond where results land, it is what makes a
+# benchmark-scale run finish: `n_concurrent_trials` is how many tasks execute
+# at once, `retry` is what a transient provider or network failure costs, and
+# `environment` is how a trial's declared resources are adjusted to the
+# machine actually running it.
+_RUN_KEYS = {
+    "jobs_dir",
+    "n_attempts",
+    "n_concurrent_trials",
+    "artifacts",
+    "retry",
+    "environment",
+    "timeout_multiplier",
+    "agent_timeout_multiplier",
+    "verifier_timeout_multiplier",
+    "quiet",
+}
+_RETRY_KEYS = {
+    "max_retries",
+    "include_exceptions",
+    "exclude_exceptions",
+    "wait_multiplier",
+    "min_wait_sec",
+    "max_wait_sec",
+}
+_ENVIRONMENT_KEYS = {
+    "force_build",
+    "delete",
+    "cpu_enforcement_policy",
+    "memory_enforcement_policy",
+    "override_cpus",
+    "override_memory_mb",
+    "override_storage_mb",
+}
 _TASK_KEYS = {"path"}
 _BENCHMARK_KEYS = {
     "dataset",
@@ -256,6 +295,18 @@ def _build_config(
 
     run = _require_mapping(document.get("run", {}), "'run'", source)
     _reject_unknown(run, _RUN_KEYS, "'run'", source)
+    _reject_unknown(
+        _require_mapping(run.get("retry", {}), "'run.retry'", source),
+        _RETRY_KEYS,
+        "'run.retry'",
+        source,
+    )
+    _reject_unknown(
+        _require_mapping(run.get("environment", {}), "'run.environment'", source),
+        _ENVIRONMENT_KEYS,
+        "'run.environment'",
+        source,
+    )
     benchmark, task_path = _build_source(document, source)
     model = _require_mapping(document.get("model"), "'model'", source)
     _reject_unknown(model, _MODEL_KEYS, "'model'", source)
@@ -273,6 +324,7 @@ def _build_config(
             agent.get("hyperparameters", {}), "'agent.hyperparameters'", source
         )
     )
+    _validate_concurrency(run, agent, source)
 
     return ExperimentConfig(
         name=_require_str(document, "name", "the configuration", source),
@@ -290,6 +342,55 @@ def _build_config(
         agent_commit=agent.get("commit"),
         hyperparameters=hyperparameters,
     )
+
+
+def _validate_concurrency(
+        run: Mapping[str, Any],
+        agent: Mapping[str, Any],
+        source: str,
+) -> None:
+    """Check the two concurrency limits against each other before launching.
+
+    Harbor runs at most `run.n_concurrent_trials` trials at once, and
+    `agent.n_concurrent` is a sub-limit within that on how many of them may be
+    calling the model at the same time — the knob for a provider's rate limit,
+    as distinct from the machine's capacity. Harbor rejects a sub-limit above
+    the total, and raising one without the other is the natural mistake when
+    scaling a configuration up, so it is worth catching here with the reason
+    attached rather than as a validation error once the run has started.
+    """
+    n_concurrent_trials = run.get("n_concurrent_trials")
+    if n_concurrent_trials is not None and (
+            isinstance(n_concurrent_trials, bool)
+            or not isinstance(n_concurrent_trials, int)
+            or n_concurrent_trials < 1
+    ):
+        raise ConfigurationError(
+            f"'run.n_concurrent_trials' in {source} must be a positive integer."
+        )
+
+    n_concurrent = agent.get("n_concurrent")
+    if n_concurrent is None:
+        return
+    if isinstance(n_concurrent, bool) or not isinstance(n_concurrent, int) or n_concurrent < 1:
+        raise ConfigurationError(
+            f"'agent.n_concurrent' in {source} must be a positive integer."
+        )
+
+    effective_trials = (
+        n_concurrent_trials
+        if n_concurrent_trials is not None
+        else DEFAULT_N_CONCURRENT_TRIALS
+    )
+    if n_concurrent > effective_trials:
+        raise ConfigurationError(
+            f"'agent.n_concurrent' ({n_concurrent}) in {source} exceeds "
+            f"'run.n_concurrent_trials' ({effective_trials}); it is a limit on "
+            "how many of the concurrent trials may call the model at once, so "
+            "it can never be the larger of the two. Raise "
+            "'run.n_concurrent_trials' to run more tasks in parallel, and "
+            "lower 'agent.n_concurrent' only to stay under a rate limit."
+        )
 
 
 def _build_source(

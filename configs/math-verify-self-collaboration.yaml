@@ -47,7 +47,7 @@ agent:
   n_concurrent: 1
   # The revision of the code generation tool under evaluation. Pinning it here
   # keeps the tool's version part of the recorded setup. This revision carries
-  # two patches over upstream, described in docs/latex/tool-modifications.tex.
+  # three patches over upstream, described in docs/latex/tool-modifications.tex.
   repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
   commit: d5f8a2339bbabd5f892dcffd04469cdc512cb03a
   hyperparameters:
@@ -74,9 +74,23 @@ agent:
     # run's model usage, whichever is used.
     request_extra:
       reasoning:
-        enabled: true
+        enabled: false
     # What the Tester runs in the agent's own workspace between Coder rounds.
     # This exercises only the code and tests the agent wrote itself; the
     # benchmark's reference tests live in the tester sidecar and stay hidden.
     # Drop this key to disable the Tester phase.
-    test_command: python -m pip install -e . -q && python -m pytest -q --continue-on-collection-errors
+    #
+    # pytest exits 5 when it collects nothing, which the Tester reports as a
+    # failure with no explanation, and the next Coder round is told its work
+    # was incorrect. On a project built from scratch that is the normal state
+    # until the agent writes its tests, so the command says so explicitly.
+    # The message goes to stderr, which the tool appends last, so it survives
+    # the summarizer's fallback to the tail of the output.
+    test_command: |
+      python -m pip install -e . -q
+      python -m pytest -q --continue-on-collection-errors
+      status=$?
+      if [ "$status" -eq 5 ]; then
+        echo "No tests were collected. The project has no test suite yet: write tests that exercise the public API described in the task, then make them pass." >&2
+      fi
+      exit $status

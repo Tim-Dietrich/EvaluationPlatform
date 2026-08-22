@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,15 @@ from evaluation_platform.benchmark import (
     BenchmarkPreparation,
     BenchmarkSettings,
     ImageMirrorRule,
+    MachineCapacity,
     MirroredImage,
+    TrialDemand,
+    _demand_of,
     _images_named_by,
     _make_available,
+    _mirror_images,
     _mirror_source,
+    concurrency_advice,
 )
 from evaluation_platform.experiment_config import load_experiment_config
 
@@ -132,7 +138,7 @@ def test_only_unreachable_images_are_mirrored(tmp_path):
 def test_a_missing_image_is_pulled_and_tagged_under_the_expected_name(monkeypatch):
     calls = []
 
-    def fake_docker(arguments, check=True, stream=False):
+    def fake_docker(arguments, check=True):
         calls.append(arguments)
         if arguments[:2] == ["image", "inspect"] and "--format" not in arguments:
             raise AssertionError("unreachable: existence is stubbed separately")
@@ -163,7 +169,7 @@ def test_an_image_already_present_is_not_pulled_again(monkeypatch):
     monkeypatch.setattr(
         benchmark_module,
         "_docker",
-        lambda arguments, check=True, stream=False: (_ for _ in ()).throw(
+        lambda arguments, check=True: (_ for _ in ()).throw(
             AssertionError(f"unexpected docker call: {arguments}")
         )
         if arguments[0] == "pull"
@@ -232,3 +238,161 @@ def test_a_non_registry_dataset_is_rejected_before_any_download():
 
     with pytest.raises(BenchmarkError):
         benchmark_module.prepare(settings, log=lambda message: None)
+
+
+def test_tester_images_are_prepared_concurrently(monkeypatch):
+    """104 images at roughly two gigabytes each is the fixed cost of a run.
+
+    Pulling is bound by the network rather than by this machine, so preparing
+    the images one after another would cost more wall-clock time than the run
+    it precedes. What matters is that several are in flight at once.
+    """
+    import asyncio
+
+    in_flight = 0
+    peak = 0
+
+    def slow_make_available(task, expected, source, log):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        time.sleep(0.02)
+        in_flight -= 1
+        return MirroredImage(
+            task=task,
+            expected=expected,
+            pulled_from=source,
+            digest=None,
+            already_present=False,
+        )
+
+    monkeypatch.setattr(benchmark_module, "_make_available", slow_make_available)
+    monkeypatch.setattr(
+        benchmark_module,
+        "_images_named_by",
+        lambda task_dir: [f"{NL2REPOBENCH_PRIVATE_PREFIX}{task_dir.name}:1.0"],
+    )
+    rules = [
+        ImageMirrorRule(
+            expects=NL2REPOBENCH_PRIVATE_PREFIX,
+            pull_from="ghcr.io/multimodal-art-projection/nl2repobench/",
+        )
+    ]
+    tasks = [(f"nl2repobench/task-{index}", Path(f"task-{index}")) for index in range(8)]
+
+    images = asyncio.run(
+        _mirror_images(tasks, rules, log=lambda message: None, pull_concurrency=4)
+    )
+
+    assert len(images) == 8
+    assert peak > 1
+    assert peak <= 4
+
+
+def test_an_image_two_tasks_share_is_prepared_once(monkeypatch):
+    import asyncio
+
+    prepared = []
+
+    monkeypatch.setattr(
+        benchmark_module,
+        "_make_available",
+        lambda task, expected, source, log: prepared.append(expected)
+        or MirroredImage(task, expected, source, None, False),
+    )
+    monkeypatch.setattr(
+        benchmark_module,
+        "_images_named_by",
+        lambda task_dir: [f"{NL2REPOBENCH_PRIVATE_PREFIX}shared:1.0"],
+    )
+    rules = [
+        ImageMirrorRule(
+            expects=NL2REPOBENCH_PRIVATE_PREFIX,
+            pull_from="ghcr.io/multimodal-art-projection/nl2repobench/",
+        )
+    ]
+
+    images = asyncio.run(
+        _mirror_images(
+            [("nl2repobench/a", Path("a")), ("nl2repobench/b", Path("b"))],
+            rules,
+            log=lambda message: None,
+            pull_concurrency=4,
+        )
+    )
+
+    assert prepared == [f"{NL2REPOBENCH_PRIVATE_PREFIX}shared:1.0"]
+    assert len(images) == 1
+
+
+def test_what_a_trial_asks_for_is_the_largest_task_in_the_selection(tmp_path):
+    """Concurrency has to hold for every task, so the maximum is the figure."""
+    for name, cpus, memory_mb in (("small", 1, 2048), ("large", 2, 8192)):
+        task_dir = tmp_path / name
+        task_dir.mkdir()
+        (task_dir / "task.toml").write_text(
+            f"[environment]\ncpus = {cpus}\nmemory_mb = {memory_mb}\n",
+            encoding="utf-8",
+        )
+
+    assert _demand_of([tmp_path / "small", tmp_path / "large"]) == TrialDemand(
+        cpus=2, memory_mb=8192
+    )
+
+
+def test_a_task_without_declared_resources_leaves_the_demand_unknown(tmp_path):
+    (tmp_path / "task.toml").write_text('[task]\nname = "x"\n', encoding="utf-8")
+
+    assert _demand_of([tmp_path]) == TrialDemand(cpus=None, memory_mb=None)
+
+
+def test_concurrency_the_machine_can_hold_is_reported_without_a_remedy():
+    advice = concurrency_advice(
+        TrialDemand(cpus=2, memory_mb=2048),
+        MachineCapacity(cpus=12, memory_mb=16384),
+        n_concurrent_trials=4,
+    )
+
+    assert len(advice) == 1
+    assert "2048 MB" in advice[0]
+
+
+def test_concurrency_beyond_the_machine_is_reported_before_the_run_starts():
+    """Ten hours into a run is an expensive place to learn this."""
+    advice = concurrency_advice(
+        TrialDemand(cpus=2, memory_mb=8192),
+        MachineCapacity(cpus=12, memory_mb=7789),
+        n_concurrent_trials=4,
+    )
+
+    assert len(advice) == 2
+    assert "n_concurrent_trials" in advice[1]
+    assert "override_memory_mb" in advice[1]
+
+
+def test_no_advice_is_given_when_there_is_nothing_to_compare():
+    assert concurrency_advice(TrialDemand(), MachineCapacity(), 4) == []
+    assert concurrency_advice(TrialDemand(2, 8192), MachineCapacity(), 4) == []
+
+
+def test_the_benchmark_record_states_what_a_trial_asks_for(tmp_path):
+    """The record is what makes a result comparable after the fact.
+
+    A run's concurrency is only interpretable next to what one trial of it
+    needed, so the demand is archived with the tasks and images.
+    """
+    record = archive_benchmark(
+        BenchmarkPreparation(
+            dataset="nl2repobench/nl2repobench",
+            resolved_ref="sha256:pinned",
+            task_names=["nl2repobench/math-verify"],
+            images=[],
+            demand=TrialDemand(cpus=2, memory_mb=8192),
+        ),
+        tmp_path,
+    )
+
+    assert json.loads(record.read_text(encoding="utf-8"))["trial_demand"] == {
+        "cpus": 2,
+        "memory_mb": 8192,
+    }

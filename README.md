@@ -125,6 +125,78 @@ A configuration may instead point at a single local task directory with
 `task: {path: ...}`, for a task authored by hand rather than taken from a
 benchmark. Exactly one of `benchmark` and `task` is required.
 
+## Running a whole benchmark
+
+A NL2RepoBench task takes around six minutes, so 104 of them in sequence is
+about ten hours. Harbor runs trials concurrently, and `run.n_concurrent_trials`
+is how many at once:
+
+```yaml
+run:
+  n_concurrent_trials: 4
+  retry:
+    max_retries: 2
+    wait_multiplier: 2
+    min_wait_sec: 5
+    max_wait_sec: 120
+```
+
+Four concurrent trials turns ten hours into roughly two and a half. There are
+two limits to weigh, and they are not the same limit:
+
+- **`run.n_concurrent_trials`** is the machine's. Every task declares what it
+  needs — NL2RepoBench asks for 2 CPUs and 8 GB per trial — and each trial runs
+  both its agent container and its tester sidecar. Harbor passes the declared
+  memory to Docker as a ceiling, so a trial that reaches it is killed and the
+  task is scored as an error rather than merely slowed down. Before a run
+  starts, the launcher reads what the selected tasks ask for, compares it with
+  what Docker reports it has, and says so. On Windows and macOS that figure is
+  the Docker VM's allocation, not the host's hardware, and raising it is often
+  the cheapest way to run more tasks at once.
+- **`agent.n_concurrent`** is the provider's. It caps how many of those trials
+  may be calling the model at the same time, while container setup,
+  installation, and verification stay fully parallel. Set it equal to
+  `n_concurrent_trials` for no extra limit, and lower it to stay under a rate
+  limit. It can never be the larger of the two; a configuration that makes it
+  so is rejected before Docker starts.
+
+Because tasks spend most of their time waiting on the model rather than on this
+machine's processors, concurrency well above the core count still pays. Memory
+is the ceiling that bites first.
+
+`run.retry` is the other half of making a long run finish. Across a hundred
+tasks a provider hiccup or a dropped connection is close to certain, and
+without a retry the affected task is simply missing from the results. Harbor's
+own exclusions still apply, so failures a retry cannot fix — a timeout, an
+exhausted usage limit, a rejected credential — fail once rather than three
+times.
+
+Tester images are prepared concurrently too. Each NL2RepoBench image is around
+two gigabytes and every task has its own, so the whole benchmark is a large
+one-time download; pulling them one at a time would cost more than the run
+itself. They are cached, so only the first run pays.
+
+### Continuing an interrupted run
+
+Harbor keeps every trial that already has a result, so a run that dies at task
+80 of 104 costs the remaining tasks rather than all of them:
+
+```powershell
+.venv\Scripts\python.exe main.py --resume jobs\2026-08-21__16-48-46
+```
+
+The setup comes from the `experiment-config.yaml` archived beside the job, so a
+resume continues the run that was configured rather than offering a chance to
+change it — `--resume` cannot be combined with `--config` or `--job-name`. Any
+tester images the remaining tasks need are made available again first, since a
+resume may happen days later on a machine whose images have since been pruned.
+Trials that were cancelled are discarded and run again; trials that finished,
+including failed ones, are kept.
+
+A job is resumable once Harbor has written its `config.json`. A run that failed
+before that point — a configuration error, an unreachable image — has to be
+launched again.
+
 ## The three roles
 
 Self-Collaboration is a team of three: the Analyst localizes the work, the

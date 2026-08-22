@@ -7,10 +7,10 @@
 # solution means copying this file, changing only the `agent` section, and
 # leaving the `benchmark` block byte-identical.
 #
-# Scale: 104 tasks, each with its own tester image (several GB in total) and
-# its own agent and verifier timeouts. Raise `n_concurrent_trials` to match the
-# machine, and start from `math-verify-self-collaboration.yaml` when iterating
-# on the setup itself.
+# Scale: 104 tasks, each with its own tester image and its own agent and
+# verifier timeouts. Run sequentially the benchmark takes about ten hours, so
+# what makes it practical is `run.n_concurrent_trials` below. Start from
+# `math-verify-self-collaboration.yaml` when iterating on the setup itself.
 
 name: nl2repobench-self-collaboration
 description: >-
@@ -22,7 +22,29 @@ description: >-
 run:
   jobs_dir: jobs
   n_attempts: 1
-  n_concurrent_trials: 2
+  # How many tasks execute at once. This is the setting that decides whether
+  # the benchmark takes ten hours or two, and the one to match to the machine:
+  # each NL2RepoBench task declares a ceiling of 2 CPUs and 8 GB, and the
+  # launcher reports how that compares with what Docker actually has before
+  # the first container starts.
+  #
+  # Four suits a machine giving Docker around 8 GB. Tasks spend most of their
+  # time waiting on the model rather than on this machine's processors, so
+  # concurrency well above the core count still pays; memory is the ceiling
+  # that bites, because a trial that reaches its limit is killed and scored as
+  # a failed task rather than merely slowed down.
+  n_concurrent_trials: 4
+  # What a transient failure costs. Over 104 tasks a provider hiccup or a lost
+  # connection is close to certain, and without this the affected task is
+  # scored as an error and its result is simply missing from the run. Harbor's
+  # own exclusions still apply, so the failures that a retry cannot fix — a
+  # timeout, an exhausted usage limit, a rejected credential — fail once
+  # rather than three times.
+  retry:
+    max_retries: 2
+    wait_multiplier: 2
+    min_wait_sec: 5
+    max_wait_sec: 120
   artifacts:
     - /workspace
 
@@ -52,11 +74,15 @@ model:
 
 agent:
   import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
-  n_concurrent: 2
-  # The revision of the code generation tool under evaluation. It carries two
-  # patches over upstream, described in docs/latex/tool-modifications.tex.
+  # A sub-limit within `n_concurrent_trials` on how many trials may be calling
+  # the model at the same time. Equal to it, as here, it does nothing; lower it
+  # to stay under a provider's rate limit without giving up the concurrency
+  # that container setup, installation, and verification still get.
+  n_concurrent: 4
+  # The revision of the code generation tool under evaluation. It carries
+  # three patches over upstream, described in docs/latex/tool-modifications.tex.
   repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
-  commit: d5f8a2339bbabd5f892dcffd04469cdc512cb03a
+  commit: 3261e6fa04e683bf5f8e3327ea2ad40b57848aed
   hyperparameters:
     max_rounds: 3
     analyst_steps: 10
@@ -80,4 +106,18 @@ agent:
     request_extra:
       reasoning:
         enabled: true
-    test_command: python -m pip install -e . -q && python -m pytest -q --continue-on-collection-errors
+    #
+    # pytest exits 5 when it collects nothing, which the Tester reports as a
+    # failure with no explanation, and the next Coder round is told its work
+    # was incorrect. On a project built from scratch that is the normal state
+    # until the agent writes its tests, so the command says so explicitly.
+    # The message goes to stderr, which the tool appends last, so it survives
+    # the summarizer's fallback to the tail of the output.
+    test_command: |
+      python -m pip install -e . -q
+      python -m pytest -q --continue-on-collection-errors
+      status=$?
+      if [ "$status" -eq 5 ]; then
+        echo "No tests were collected. The project has no test suite yet: write tests that exercise the public API described in the task, then make them pass." >&2
+      fi
+      exit $status
