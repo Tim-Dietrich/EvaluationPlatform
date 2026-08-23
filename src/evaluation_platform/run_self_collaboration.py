@@ -19,6 +19,22 @@ WORKSPACE = Path("/workspace")
 HISTORY_PATH = Path("/logs/agent/session-history.json")
 USAGE_PATH = Path("/logs/agent/model-usage.json")
 RESOLVED_SETUP_PATH = Path("/logs/agent/resolved-setup.json")
+# Directories a Python build, test run, or virtual environment leaves behind in
+# the workspace. None of them is part of the generated project.
+BUILD_OUTPUT = (
+    "__pycache__/",
+    "*.py[cod]",
+    "*.egg-info/",
+    ".eggs/",
+    "build/",
+    "dist/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".tox/",
+    ".venv/",
+    "venv/",
+)
 
 
 def main() -> None:
@@ -122,9 +138,11 @@ def _read_instruction() -> str:
 def _model_settings(hyperparameters: dict[str, Any]) -> dict[str, Any]:
     """Model settings for this run, as the tool's own config accepts them.
 
-    Reasoning settings are passed only when configured, so that an unmodified
-    revision of the tool can still be pinned for a baseline comparison; asking
-    such a revision for reasoning fails loudly rather than dropping the setting.
+    Reasoning settings are passed only when configured. The revision under
+    evaluation is the authors' own and declares no reasoning field, so a
+    configuration that asks for reasoning fails the run at startup rather than
+    having the setting silently dropped, and a configuration that says nothing
+    about it runs against that revision unmodified.
     """
     settings: dict[str, Any] = {
         "max_tokens": hyperparameters["max_tokens"],
@@ -201,11 +219,33 @@ def _initialize_repository() -> None:
     subprocess.run(
         ["git", "config", "user.name", "Harbor"], cwd=WORKSPACE, check=True
     )
+    _exclude_build_output()
     subprocess.run(
         ["git", "commit", "--allow-empty", "--quiet", "-m", "Initial workspace"],
         cwd=WORKSPACE,
         check=True,
     )
+
+
+def _exclude_build_output() -> None:
+    """Keep build output out of the repository view the tool reads.
+
+    The tool decides whether the Coder produced anything, and what to show it
+    of its previous attempt, by reading `git diff`, which sees nothing of a
+    project written from scratch because every file of it is untracked. The
+    experiment's test command makes those files visible with
+    `git add --intent-to-add`; left alone it would sweep up everything `pip
+    install` and `pytest` leave behind as well, padding the record of the
+    previous attempt and reporting work in a round where the Coder did none.
+
+    The patterns go in `.git/info/exclude` rather than in a `.gitignore`, so
+    that nothing of ours is added to the project the benchmark grades.
+    """
+    exclude_path = WORKSPACE / ".git" / "info" / "exclude"
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    with exclude_path.open("a", encoding="utf-8") as handle:
+        for pattern in BUILD_OUTPUT:
+            print(pattern, file=handle)
 
 
 if __name__ == "__main__":

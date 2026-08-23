@@ -1,7 +1,8 @@
 import asyncio
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from textwrap import dedent
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -29,6 +30,7 @@ from evaluation_platform.run_codes import (
     BudgetExhausted,
     _Budget,
     _is_rate_limit,
+    _memoise_file_sketching,
     _read_templates,
     _requester,
     _run_phases,
@@ -353,7 +355,16 @@ def answered(record: dict[str, Any]) -> str:
     return "alpha.py beta.py notes.md"
 
 
-def run_phases(tool: Any = None, workers: int = 1) -> dict[str, list[dict[str, Any]]]:
+def unbounded() -> _Budget:
+    """A budget that stops nothing, for the tests that are not about budgets."""
+    return _Budget(CODE_S.resolve({}), UsageTotals())
+
+
+def run_phases(
+        tool: Any = None,
+        workers: int = 1,
+        budget: _Budget | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {phase: [] for phase in PHASES}
     _run_phases(
         tool or fake_tool(),
@@ -361,6 +372,7 @@ def run_phases(tool: Any = None, workers: int = 1) -> dict[str, list[dict[str, A
         readme="# library",
         request=answered,
         workers=workers,
+        budget=budget or unbounded(),
     )
     return records
 
@@ -398,12 +410,137 @@ def test_one_file_the_tool_cannot_parse_does_not_cost_the_others():
         return answered(record)
 
     records: dict[str, list[dict[str, Any]]] = {phase: [] for phase in PHASES}
-    _run_phases(fake_tool(), records, readme="#", request=request, workers=1)
+    _run_phases(
+        fake_tool(),
+        records,
+        readme="#",
+        request=request,
+        workers=1,
+        budget=unbounded(),
+    )
 
     assert [record["current_file_path"] for record in records[FUNCTION_BODY]] == [
         "beta.py"
     ]
     assert records[FILE_SKETCH][0]["function_prompts_failed"] is True
+
+
+def test_a_budget_stops_prompt_construction_and_not_only_requests():
+    """The third phase spends without sending, so a budget read at each request
+    is not read for the whole of the stretch a run is likeliest to overrun in.
+
+    That stretch is CodeS's own construction of the function body prompts,
+    whose length is set by how many files the model named and how many
+    functions it declared in them. Unbounded it reaches the agent timeout,
+    which records nothing; bounded it stops, and the file sketches already paid
+    for still assemble.
+    """
+    totals = UsageTotals()
+
+    def request(record):
+        totals.output_tokens += 20
+        return answered(record)
+
+    records: dict[str, list[dict[str, Any]]] = {phase: [] for phase in PHASES}
+    with pytest.raises(BudgetExhausted, match="max_token_budget"):
+        _run_phases(
+            fake_tool(),
+            records,
+            readme="#",
+            request=request,
+            workers=1,
+            budget=_Budget(CODE_S.resolve({"max_token_budget": 25}), totals),
+        )
+
+    assert [record["file_path"] for record in records[FILE_SKETCH]] == [
+        "alpha.py",
+        "beta.py",
+    ]
+    assert records[FUNCTION_BODY] == []
+
+
+def sketching_module() -> Any:
+    """CodeS's sketch machinery, cut down to the shape the memo has to survive.
+
+    The tool reaches `replace_function_body` through its own module's globals
+    rather than through a reference it captured at import, which is what lets
+    the runner install a memo on the module without modifying the checkout.
+    Reproducing that needs a real module namespace, so the double is defined
+    inside one rather than assembled from functions defined here.
+    """
+    module = ModuleType("extract_sketch_double")
+    exec(
+        dedent(
+            '''
+            built = []
+
+
+            def replace_function_body(
+                    source_code, unimplemented_function_name="", index=0
+            ):
+                """Parse, render and format one file. Expensive in the tool."""
+                built.append((source_code, unimplemented_function_name))
+                return f"[{source_code}:{unimplemented_function_name or 'whole'}]"
+
+
+            def relevant_final_prompt(current, imported, function_name):
+                """One function's context: what it imports, then its own file."""
+                sketches = [replace_function_body(each) for each in imported]
+                sketches.append(replace_function_body(current, function_name))
+                return "".join(sketches)
+            '''
+        ),
+        module.__dict__,
+    )
+    return module
+
+
+def test_an_imported_files_sketch_is_built_once_not_once_per_function():
+    """What a design of any size spends its wall clock on before it asks.
+
+    CodeS gives every function body prompt the sketches of the files its own
+    file imports, and rebuilds each of them for every function, though the call
+    passes the file's contents and nothing else and so returns the same string
+    every time. Each rebuild parses and formats a whole file. Multiplied by the
+    functions of every file it is the hours this phase can take.
+    """
+    module = sketching_module()
+    _memoise_file_sketching(module)
+
+    for name in ("read", "write", "close"):
+        module.relevant_final_prompt("main.py", ["io.py", "util.py"], name)
+
+    assert [file for file, function in module.built if not function] == [
+        "io.py",
+        "util.py",
+    ]
+    # The sketch of the file the function is in names that function, so it
+    # differs for every prompt and is built for every prompt.
+    assert [function for file, function in module.built if function] == [
+        "read",
+        "write",
+        "close",
+    ]
+
+
+def test_the_memo_answers_with_what_the_tool_would_have_returned():
+    plain, memoised = sketching_module(), sketching_module()
+    _memoise_file_sketching(memoised)
+
+    names = ("read", "write")
+    assert [
+        memoised.relevant_final_prompt("main.py", ["io.py"], name) for name in names
+    ] == [plain.relevant_final_prompt("main.py", ["io.py"], name) for name in names]
+
+
+def test_the_memo_is_installed_once_however_often_the_tool_is_imported():
+    module = sketching_module()
+
+    _memoise_file_sketching(module)
+    installed = module.replace_function_body
+    _memoise_file_sketching(module)
+
+    assert module.replace_function_body is installed
 
 
 def build_repository(tmp_path, monkeypatch, records) -> tuple[Path, dict[str, Any]]:

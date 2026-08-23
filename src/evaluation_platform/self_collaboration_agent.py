@@ -10,9 +10,16 @@ from harbor.models.agent.context import AgentContext
 from evaluation_platform.experiment_config import SELF_COLLABORATION
 from evaluation_platform.model_usage import populate_usage_context
 
-SELF_COLLABORATION_COMMIT = "d5f8a2339bbabd5f892dcffd04469cdc512cb03a"
+# The authors' own repository at its current head, evaluated unmodified.
+# An earlier revision of this platform pinned a fork carrying three patches
+# that adapted the tool to tasks built from scratch. The fork remains for
+# discussion, but no longer takes part in benchmarking, so that a measured
+# difference is attributable to the published method rather than to our
+# changes to it. What those patches worked around, and what running without
+# them costs, is described in docs/latex/tool-modifications.tex.
+SELF_COLLABORATION_COMMIT = "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"
 SELF_COLLABORATION_REPOSITORY = (
-    "https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git"
+    "https://github.com/YihongDong/Self-collaboration-Code-Generation.git"
 )
 TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
 HYPERPARAMETERS_PATH = "/installed-agent/hyperparameters.json"

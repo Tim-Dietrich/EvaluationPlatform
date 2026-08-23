@@ -25,10 +25,12 @@ happens: the generated repository goes to `/workspace` and the phase records
 to `/logs/agent/`; the requests carry the sampling, reasoning and usage
 accounting the driver has no notion of; the run is bounded and assembles
 whatever it has even when it stops early; one file's failure is contained to
-that file; and a phase's requests may be in flight together.
+that file; a phase's requests may be in flight together; and a file's sketch
+is built once rather than once per function that reads it.
 """
 
 import ast
+import functools
 import importlib
 import json
 import os
@@ -99,6 +101,7 @@ def main() -> None:
             readme=readme,
             request=request,
             workers=hyperparameters["concurrent_requests"],
+            budget=budget,
         )
     finally:
         # Everything below reports on the run rather than continuing it, so it
@@ -120,6 +123,7 @@ def _run_phases(
         readme: str,
         request: Callable[[dict[str, Any]], str],
         workers: int,
+        budget: "_Budget",
 ) -> None:
     """The three phases, in the order and the shape the tool's driver runs them.
 
@@ -145,9 +149,22 @@ def _run_phases(
     _answer(tool, records[FILE_SKETCH], request, workers)
 
     sketches = {each["file_path"]: each for each in records[FILE_SKETCH]}
-    for each in sketches.values():
+    for done, each in enumerate(sketches.values()):
         if not each["file_path"].endswith(".py"):
             continue
+        # Building this phase's prompts is the one stretch of a run that makes
+        # no requests, and a budget consulted only when a request is sent is
+        # therefore not consulted here at all. It is also the stretch most able
+        # to overrun, because its cost is set by how many files the model named
+        # and how many functions it declared in them rather than by anything a
+        # configuration chose. Checked here, a run that has spent its budget
+        # stops and assembles the file sketches it paid for, in place of
+        # running on to an agent timeout that records nothing.
+        budget.check()
+        _progress(
+            f"function body prompts: file {done + 1} of {len(sketches)}, "
+            f"{each['file_path']}, {len(records[FUNCTION_BODY])} functions so far"
+        )
         # A file sketch the model returned malformed can defeat the tool's
         # parsing of it, and one file is not the run. The failure is contained
         # to the file it came from, counted, and reported in the resolved
@@ -406,7 +423,59 @@ def _import_tool() -> Any:
         )
     finally:
         sys.argv = argv
+    _memoise_file_sketching(importlib.import_module("extract_sketch"))
     return tool
+
+
+def _memoise_file_sketching(extract_sketch: Any) -> None:
+    """Stop the third phase rebuilding one file's sketch once per function.
+
+    A function body prompt carries the sketch of the file the function is in
+    and the sketches of the files it imports, and CodeS builds all of them from
+    scratch for every function it asks about. The imported files' sketches do
+    not depend on which function is being asked about — the call passes the
+    file's contents and nothing else — so a file declaring forty functions
+    rebuilds each of its neighbours' sketches forty times and gets the same
+    string every time.
+
+    None of that is cheap. Each rebuild parses the file, renders the syntax
+    tree back to source through `astor` and formats the result with `black`,
+    which for a sketch of a few hundred lines is on the order of a tenth of a
+    second. Across the functions, the imports and the files of a design of any
+    size it becomes hours, and they are silent hours: this phase reaches no
+    API, so a run spends them consuming no tokens, reporting nothing, and
+    checking neither budget below.
+
+    `replace_function_body` is deterministic and reads nothing but its
+    arguments, so answering the repeats from a memo returns what the call would
+    have returned. Only the repeated form is kept. The sketch of the file the
+    function is in names that function and so differs for every request; it is
+    asked for once, and holding it would fill the memo with the largest strings
+    in the run for no hit. What remains is one entry per generated file.
+
+    This is installed on the imported module rather than in the checkout
+    because the revision a configuration pins is what runs, unmodified. Both of
+    the tool's call sites resolve the name through the module when they reach
+    it, so both are covered.
+    """
+    original = extract_sketch.replace_function_body
+    if getattr(original, "__wrapped__", None) is not None:
+        return
+    cache: dict[str, str] = {}
+
+    @functools.wraps(original)
+    def replace_function_body(
+            source_code: str,
+            unimplemented_function_name: str = "",
+            index: int = 0,
+    ) -> str:
+        if unimplemented_function_name or index:
+            return original(source_code, unimplemented_function_name, index)
+        if source_code not in cache:
+            cache[source_code] = original(source_code)
+        return cache[source_code]
+
+    extract_sketch.replace_function_body = replace_function_body
 
 
 class _Tool:
@@ -482,6 +551,21 @@ def _require_deprecated_ast_aliases() -> None:
             "Python 3.13 or older, or pin a revision of CodeS that has been "
             "ported."
         )
+
+
+def _progress(note: str) -> None:
+    """Say where a phase has got to, for a log read while a run is going on.
+
+    The tool's own output is the request log of its client, so a phase that
+    makes no requests produces no output, and a run in one is indistinguishable
+    in the log from a run that has stopped. The third phase's prompt
+    construction is such a phase and is not brief.
+
+    Flushed because the runner's output is a pipe rather than a terminal, where
+    the buffer this would otherwise sit in is emptied at the size of a block or
+    at exit — neither of which is while it is worth reading.
+    """
+    print(note, flush=True)
 
 
 def _guarded(action: Callable[[], Any]) -> Any:

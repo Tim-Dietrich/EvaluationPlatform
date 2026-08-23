@@ -1,31 +1,31 @@
 % Fragment intended to be \input into a larger document.
 % Deliberately uses no packages and defines no macros: it relies only on
-% sectioning, \texttt, \emph, itemize and verbatim, all of which are part of
-% core LaTeX. Adjust the sectioning level to taste.
+% sectioning, cross-referencing, \texttt, \emph, itemize and verbatim,
+% all of which are part of core LaTeX. Adjust the sectioning level to taste.
 
-\section{Modifications to Self-Collaboration}
+\section{Running Self-Collaboration Unmodified}
 
-The first of the two code generation solutions under evaluation is
+The first of the code generation solutions under evaluation is
 Self-Collaboration, a multi-agent method in which three roles cooperate on a
 programming task: an \emph{Analyst}, who inspects the repository and decides
-what has to be written; a \emph{Coder}, who writes it; and a \emph{Tester},
-who runs the tests and reports failures back to the Coder for a further round. The implementation we
-evaluate is a fork of the authors' code, and our aim is to leave the method
-itself untouched, so that differences in measured performance are attributable
-to the method and the model rather than to our harness. Four interventions
-were nevertheless necessary before the method could run as described and be
-compared across configurations. The first is a matter of configuration. The
-remaining three are changes to the implementation, and are the reason this
-section exists at all.
+what has to be written; a \emph{Coder}, who writes it; and a \emph{Tester}, who
+runs the tests and reports failures back to the Coder for a further round. We
+evaluate the authors' own implementation at its published head, with no changes
+of our own to it, so that a difference in measured performance is attributable
+to the method and the model rather than to our harness. An earlier revision of
+this platform carried three patches over that implementation; they are
+described in Section~\ref{sec:selfcollab-patches} and take no part in any
+benchmark run reported here.
 
-A common cause underlies most of them. The implementation was written for
-repair tasks, where an existing repository is modified under version control,
-and it uses the resulting diff as its evidence that anything happened. The
-tasks in this work are the opposite: an empty workspace and a specification
-from which an entire project must be written. Nothing the agent produces is
-tracked, so every mechanism that reads a diff reads nothing, and each such
-mechanism fails in a different way. What we changed is the harness's reading
-of the repository, never the roles or what they are asked to do.
+Running the implementation as published is not free, because it was written for
+a different shape of task, and this section is an account of what that costs.
+The implementation targets repair tasks, where an existing repository is
+modified under version control, and it uses the resulting diff as its evidence
+that anything happened. The tasks in this work are the opposite: an empty
+workspace and a specification from which an entire project must be written.
+Nothing the agent produces is tracked, so every mechanism that reads a diff
+reads nothing. Two accommodations follow, both made outside the tool; two
+further consequences we accept and report rather than accommodate.
 
 The exact revision of the solution used in every run is recorded with the run
 itself, so that any reported result can be traced to the code that produced it.
@@ -61,8 +61,6 @@ grading.
 
 \subsection{Change Detection on Tasks Built From Scratch}
 
-The second intervention is a one-line change to the implementation.
-
 After running the tests, the Tester performs a sanity check: it inspects the
 repository to determine whether the Coder actually produced anything, and if it
 finds no change it discards the test outcome and substitutes a synthetic
@@ -70,7 +68,7 @@ failure carrying the message ``No code changes were made''. The purpose of the
 check is to prevent a Coder that exhausted its step budget without editing
 anything from being credited with a passing test run.
 
-The check was implemented with \texttt{git diff}:
+The check is implemented with \texttt{git diff}:
 
 \begin{verbatim}
 diff_check = subprocess.run(
@@ -99,8 +97,10 @@ all, however much code was generated. The consequences compound: a genuine test
 result is discarded on every round; the Tester can never report success, since
 the substituted status is always a failure; and the report handed to the next
 Coder round asserts that its predecessor's work does not exist, while
-instructing it not to repeat the change that failed. The Tester would run, and
-would systematically misreport what it found.
+instructing it not to repeat the change that failed. Left alone, the Tester
+would run and would systematically misreport what it found, so that the
+three-role method would be measured with its third role inverted rather than
+merely absent.
 
 It is worth noting that this cannot be repaired by having the Coder commit its
 work, which is the intuitive remedy. \texttt{git diff} reports unstaged
@@ -113,37 +113,49 @@ Self-Collaboration, and nowhere in the prompts given to any of its three roles.
 It enters the implementation solely as the harness's mechanism for extracting a
 SWE-bench patch.
 
-We therefore changed the check to use \texttt{git status --porcelain}, which
-reports untracked files alongside modifications:
+What we do instead is make the generated files visible to the command the
+implementation already runs, from outside the implementation. The first line of
+the test command given to the Tester registers the workspace with the index
+without committing it:
 
 \begin{verbatim}
-change_check = subprocess.run(
-    "git status --porcelain", shell=True, cwd=self.repo_path,
-    capture_output=True, text=True,
-)
-has_changes = bool(change_check.stdout.strip())
-if not has_changes:
-    status = "failed"
-    output = "No code changes were made - nothing to test."
+git add --intent-to-add .
+python -m pip install -e . -q
+python -m pytest -q --continue-on-collection-errors
 \end{verbatim}
 
-The check now expresses what it was always intended to express, namely whether
-the Coder produced anything, and it does so correctly for both repair tasks and
-generation tasks. The separate diff that is shown back to the Coder as a record
-of its previous attempt is deliberately left as \texttt{git diff}, since that
-value is genuinely required to be a diff.
+An intent-to-add entry records that a path is to be tracked while leaving its
+content unstaged, which is precisely the state \texttt{git diff} reports. The
+check then answers the question it was written to answer, on this class of task
+as on the one it was written for, and it does so without a line of the
+implementation changing.
+
+Two details of that line are deliberate. It runs before the tests rather than
+after, so that a test run which exceeds the implementation's five-minute
+timeout still leaves the workspace in a readable state; were it to run last, a
+timeout would reach the next round as an absence of work rather than as a
+timeout. And what it registers is bounded: installing the package and running
+the suite leave behind \texttt{egg-info} metadata, bytecode caches and a pytest
+cache, none of which is part of the generated project, and all of which would
+otherwise be swept into both the change check and the record of the previous
+attempt. Our runner therefore writes the corresponding patterns to
+\texttt{.git/info/exclude} when it initialises the workspace. That file lives
+inside \texttt{.git} and never becomes part of the project the benchmark
+grades, and it keeps the check honest in the case it exists for: a round in
+which the Coder wrote nothing at all still reports no change, even though the
+Tester's own command created files.
 
 \subsection{Context Between Coder Rounds}
 
-The third intervention follows from the same assumption as the second, in a
-different place.
+The same assumption reaches a second place, and there we accept the cost rather
+than remove it.
 
-Each Coder round begins a fresh conversation. What an earlier round did
-reaches a later one only through a summary that the session assembles, built
-from four parts: the report from the Tester, the diff of the previous attempt,
-a record of the edits it made, and the file contents the Analyst read while
-localising the work. On a repair task the diff alone carries the entire
-attempt forward, and the arrangement is sound.
+Each Coder round begins a fresh conversation. What an earlier round did reaches
+a later one only through a summary that the session assembles, built from four
+parts: the report from the Tester, the diff of the previous attempt, a record
+of the edits it made, and the file contents the Analyst read while localising
+the work. On a repair task the diff alone carries the entire attempt forward,
+and the arrangement is sound.
 
 On a task built from scratch, three of those four parts are empty. The diff is
 empty because nothing is tracked. The record of edits is empty because it is
@@ -154,119 +166,130 @@ plan, the original specification, a test report, and an instruction stating
 that the previous attempt was incorrect. A later round therefore rediscovers
 its own work from scratch, while being told that work was wrong.
 
-The effect is measurable. In a run of three rounds the Coder exhausted its
-step budget in every one, consumed roughly two and a half times the input
-tokens of an earlier single-round run of the same task, and produced strictly
-less: the central module of the library was absent, and the benchmark score
-fell from 0.505 to zero. Three restarts accomplished less than one
-uninterrupted attempt. Other variables differed between those two runs, so
-this is not a controlled comparison; the mechanism, however, is visible
-directly in the assembled prompt.
+The effect is measurable. In a run of three rounds the Coder exhausted its step
+budget in every one, consumed roughly two and a half times the input tokens of
+an earlier single-round run of the same task, and produced strictly less: the
+central module of the library was absent, and the benchmark score fell from
+0.505 to zero. Three restarts accomplished less than one uninterrupted attempt.
+Other variables differed between those two runs, so this is not a controlled
+comparison; the mechanism, however, is visible directly in the assembled
+prompt.
 
-We therefore give a later round an inventory of the workspace whenever the
-diff is empty, listing the files that exist as
-\texttt{\#\# Files already in the workspace}. The listing must be requested with
-\texttt{--untracked-files=all}, since the default collapses an untracked
-directory to its name and hides the files inside it, and it is capped so that
-a single large generated directory cannot crowd out the rest of the prompt.
-Where a diff exists the listing is suppressed and the prompt is assembled
-exactly as before, so behaviour on repair tasks is unchanged.
+Registering the files for the change check repairs part of this as a side
+effect, but only part, and the residue is worth stating precisely. The session
+captures the diff it will show the next round immediately after the Coder
+finishes and before the Tester runs. In the first round that capture therefore
+happens before any test command has executed, nothing is registered yet, and
+the second round receives an empty diff exactly as it would have without the
+accommodation. From the third round onwards the diff is present. Under the
+three rounds our configurations use, one of the two follow-up rounds
+consequently still begins blind.
 
-This supplies information that the original design obtained from the diff. It
-adds no instruction, grants no capability, and leaves the role prompts as
-published.
+Where the diff is present it is also expensive. An intent-to-add entry has no
+content in the index, so the diff taken against it renders every line of every
+generated file as an addition: the third round receives the entire project
+rather than an account of what changed in the second. The prompt grows in
+proportion to the size of the library. We accept both costs. Removing either
+means changing what the session assembles, and a comparison against a method as
+published is worth more here than the rounds these costs consume.
 
 \subsection{Sampling and Reasoning Parameters}
 
 Every model call made by the Analyst and the Coder passes through a single
 function; the Tester is deterministic and calls no model at all. That function
-constructed its request from four values: the model, the messages,
+constructs its request from four values: the model, the messages,
 \texttt{max\_tokens} and \texttt{temperature}. Two things follow from what it
-omitted.
+omits, and we report both as limitations rather than repairing them.
 
-The first is that \texttt{top\_p} was dropped. The tool's own configuration
-object declares it, and the sibling function used by the non-agentic runner
-sends it; only the tool-calling path left it out. The same declared
-configuration therefore produced different sampling depending on which entry
-point was used, with the agentic path falling back to the provider's default.
-We now send it on both paths. This does change behaviour relative to earlier
-runs of the agentic path, which sampled at the provider's default rather than
-at the value the configuration named, and we report it for that reason.
+The first is that \texttt{top\_p} is dropped. The implementation's own
+configuration object declares it, and the sibling function used by the
+non-agentic runner sends it; only the tool-calling path leaves it out, so the
+same declared configuration produces different sampling depending on which
+entry point is used. Our configurations name the value the implementation
+itself defaults to, which keeps the record truthful about the intent without
+claiming an effect the run does not have: for the Analyst and the Coder,
+sampling beyond \texttt{temperature} is the provider's default.
 
-The second is that reasoning was never requested. For a model that exposes a
-reasoning or thinking mode, the amount of reasoning performed was therefore
-whatever the provider happened to default to for that model at that moment.
-Such a default is set outside the experiment, does not appear in its record,
+The second is that reasoning is never requested. For a model that exposes a
+reasoning or thinking mode, the amount of reasoning performed is therefore
+whatever the provider happens to default to for that model at that moment. Such
+a default is set outside the experiment, does not appear in its written setup,
 and may change between runs without notice. This is an uncontrolled variable in
 a place where a comparison is particularly sensitive, because reasoning tokens
 are drawn from the same output budget as the answer: a model that reasons at
 length has correspondingly less budget left to act with, and the tool-calling
-path has no fallback for a reply that consists of reasoning alone.
+path has no fallback for a reply that consists of reasoning alone. It also
+means that a no-reasoning ablation is unavailable for this solution, while it
+remains available for the other two.
 
-We therefore added two optional fields to the tool's model configuration and
-pass them through to the request. \texttt{reasoning\_effort} carries the
-OpenAI-compatible field of that name. \texttt{extra\_body} carries
-provider-specific request fields verbatim, which accommodates interfaces that
-express reasoning differently, such as OpenRouter's \texttt{reasoning} object.
-Both are omitted from the request when unset, so a configuration that says
-nothing about reasoning behaves exactly as before, and an unmodified revision
-of the tool can still be pinned for a baseline run.
-
-We then measured the defaults rather than assuming them. Both models used in
-this work reason unprompted: on a trivial tool-calling request with nothing
-asked for, \texttt{deepseek-v4-flash-0731} returned 16 reasoning tokens and
+We measured the defaults rather than assuming them. Both models used in this
+work reason unprompted: on a trivial tool-calling request with nothing asked
+for, \texttt{deepseek-v4-flash-0731} returned 16 reasoning tokens and
 \texttt{kimi-k2.5} returned 40, in both cases accompanied by a reasoning field
-on the message. Requesting a high effort, through either field, changed neither
-model measurably on that request, while disabling reasoning through the
-provider's own object removed it entirely. Every shape was accepted; none was
-rejected. Our configurations accordingly pin reasoning explicitly to the state
-the providers currently default to, so that the setting is fixed by the
-experiment rather than by the provider, and an ablation without reasoning
-becomes a one-line change. The probe was deliberately trivial, and establishes
-which settings take effect rather than how they influence performance on a
-real task.
+on the message. Requesting a high effort changed neither model measurably on
+that request, while disabling reasoning through the provider's own object
+removed it entirely. The probe establishes which settings would take effect
+rather than how they influence performance on a real task, and it tells us what
+the unrequested default is for the two models we use.
 
-Independently of whether reasoning is requested, each run now records the
-number of reasoning tokens it consumed, taken from the usage the provider
-reports. A run therefore carries evidence of what the model actually did, and
-not only of what it was asked to do, which allows a run made under a provider
-default to be identified as such after the fact. This matters in retrospect as
-well as in prospect: runs made before this change consumed reasoning tokens
-that were counted only in their output total, and cannot now be separated.
+Independently of whether reasoning is requested, each run records the number of
+reasoning tokens it consumed, taken from the usage the provider reports. A run
+therefore carries evidence of what the model actually did, and not only of what
+it was asked to do, which is what allows a run made under a provider default to
+be identified as such after the fact. Our experiment configurations reject
+\texttt{reasoning\_effort} and \texttt{request\_extra} for this solution rather
+than accepting and discarding them, so that a written configuration cannot
+claim a setting the run did not carry.
 
 \subsection{Scope of the Intervention}
 
-All three changes are confined to the harness that surrounds the roles: how it
-inspects the repository, what it carries between rounds, and how it constructs
-a request. The three role prompts, the tools available to each role, the
-structure of the session loop and the order in which the roles run are
-unmodified. No step was added to any role's instructions, and no role was given
-a capability it did not previously have. The evaluated system is accordingly a
-modified implementation rather than the published one, and we describe it as
-such: the modifications adapt an implementation written for repair tasks to
-tasks that begin from nothing, and none of them changes the method.
+Nothing in the evaluated implementation is changed. Its three role prompts, the
+tools available to each role, the structure of the session loop, the order in
+which the roles run and the construction of every model request are the
+authors'. What surrounds it is ours: the workspace is a git repository because
+the implementation requires one, that repository ignores build output, the
+Tester is given a test command and more than one round so that it runs at all,
+and that command registers the generated files before it tests them. Each of
+those is a property of the environment the implementation is invoked in, and
+each is stated in the experiment configuration that the run archives.
 
-We nonetheless report them, rather than treating them as implementation
-details, for two reasons. They are modifications to the system under
-measurement, which should be disclosed on principle. And their practical effect
-is not negligible. Without the first, the Tester role, though executed,
-contributes no usable information, so a comparison drawn against the
-unmodified implementation on this class of task would in effect be a
-comparison against a two-role method. Without the second, the rounds after the
-first are largely wasted, and additional rounds make the outcome worse rather
-than better. Without the third, two runs of the same written configuration are
-not guaranteed to have used the same sampling or the same amount of reasoning,
-which is the property a controlled comparison depends on.
+We report them for two reasons. They are choices that affect the measurement
+and should be disclosed on principle. And two of them are load-bearing: without
+a test command and a second round the Tester role never executes, and without
+the registration it executes but reports the opposite of what it found. A
+comparison drawn without either would not be a comparison against the
+three-role method.
 
-A pre-existing alternative deserves mention, since it was our first approach.
-The same effect can be obtained without touching the implementation, by having
-the Tester's command register the generated files with
-\texttt{git add --intent-to-add} once the tests have run, which makes them
-visible to \texttt{git diff}. We discarded it. It leaves the incorrect check in
-place and compensates for it externally, and it has a side effect: once the
-files are registered, the diff shown to the Coder in subsequent rounds contains
-the entire generated project, inflating the prompt for no benefit. Correcting
-the check is both smaller and more honest.
+The limitations above are the price of that position, and we state them
+together. The second of three Coder rounds begins without knowledge of the
+first; where a later round does receive the previous attempt, it receives the
+whole project rather than an account of what changed; the Analyst and the Coder
+sample at the provider's default rather than at the configured \texttt{top\_p};
+and how much either reasons is the provider's default rather than the
+experiment's choice. Each is recorded, and none is silently absorbed.
+
+\subsection{The Patches This Platform Previously Carried}
+\label{sec:selfcollab-patches}
+
+For completeness, and because they remain available for a discussion of the
+solution itself, an earlier revision of this platform evaluated a fork carrying
+three patches over the authors' implementation. The first replaced the change
+check's \texttt{git diff} with \texttt{git status --porcelain}, which reports
+untracked files and so answers the intended question directly rather than by
+way of the index. The second gave a later Coder round an inventory of the
+workspace whenever the diff was empty, supplying from a file listing what the
+original design obtained from the diff, and at a fraction of the size. The
+third sent \texttt{top\_p} on the tool-calling path as well, and added two
+optional fields, \texttt{reasoning\_effort} and \texttt{extra\_body}, through
+which a request could name a reasoning setting explicitly.
+
+Each is smaller and more direct than the accommodation that now stands in its
+place, and the second in particular has no external equivalent of comparable
+quality. We withdrew them nonetheless. They made the system under measurement a
+modified one, and a benchmark result reported against a published method should
+be a result for that method. The patches remain in the fork, and we draw on
+them where the discussion turns to what the implementation would need in order
+to suit this class of task, rather than to how it performs on it.
 
 \section{Adapting CodeTeam}
 
@@ -608,6 +631,16 @@ run leaves is a repository of correct interfaces with some bodies left as
 \texttt{pass}, which the verifier can grade, in place of an empty workspace
 which it can only score as nothing.
 
+A budget must additionally be read where a run is not sending anything. Both
+budgets are consulted as each request is made, which leaves the construction of
+the third phase's prompts --- the subject of a later subsection, and the
+longest unbroken stretch of a run --- outside them altogether: a run can pass
+its wall-clock budget several times over inside that stretch without the budget
+being read once. It is therefore consulted there as well, as each file sketch
+is taken up, so that a run which has spent what it was given stops and
+assembles what it paid for instead of continuing to an agent timeout that
+records nothing.
+
 \subsection{Containing a Failure to the File It Came From}
 
 Two places in the tool process every file in a single unguarded loop, so that
@@ -654,6 +687,51 @@ The value used is recorded with each run and reported with our results, since
 it is a deviation from the published pipeline even though it is one we can
 argue is inert.
 
+\subsection{Building Each File Sketch Once}
+
+The prompts of the third phase are all constructed before any of them is sent,
+and on a design of moderate size that construction, and not the requests, is
+where a run spends most of its wall clock. Each function body prompt carries
+the sketch of the file the function belongs to together with the sketches of
+the files that file imports, and CodeS derives every one of them afresh for
+every function it asks about. Deriving one is not cheap:
+\texttt{replace\_function\_body} parses the file, renders the syntax tree back
+to source through \texttt{astor} and formats the result with \texttt{black},
+which for a sketch of a few hundred lines takes on the order of a tenth of a
+second. A file declaring sixty functions and importing eight others performs
+five hundred and forty such derivations where sixty-eight would do, because the
+imported files' sketches do not depend on which function is being asked about
+--- the call passes the file's contents and nothing else --- and so return the
+same string every time.
+
+Left alone this is not a slow phase so much as an unfinishable one. We observed
+a trial spend two hours inside it without completing, having sent fifteen
+requests in total and reached the API not once in the interval, until the agent
+timeout ended the trial with no repository to grade. The cost grows with the
+product of the files the model named, the functions it declared in them and the
+imports between them, so it is exactly the wide designs --- the ones a
+benchmark of repository generation exists to include --- that cannot be
+measured at all.
+
+The runner therefore installs a memo over \texttt{replace\_function\_body} for
+the repeated form of the call, the form that names no function. The function is
+deterministic and reads nothing but its arguments, so the memo returns what the
+call would have returned. We checked this against the pinned revision rather
+than assuming it: the prompts built with the memo and without it are identical,
+and the derivations for the file above fall from five hundred and forty to
+sixty-eight. The form of the call that does name a function is deliberately not
+memoised, since that sketch differs for every request and is asked for once,
+and holding it would occupy memory with the largest strings in the run for no
+reuse. The memo is installed on the imported module rather than in the
+checkout, which stays unmodified at the revision a configuration pins; CodeS's
+own call sites reach it because they resolve the name through the module at the
+moment they run.
+
+This changes no prompt, no request and no answer, and alters only how many
+times the same string is computed. We record it because the phase it applies to
+is otherwise the binding constraint on which task specifications this solution
+can be evaluated on.
+
 \subsection{The Runtime the Tool Requires}
 
 Two properties of the checkout are worth recording, since both bear on
@@ -684,8 +762,9 @@ bodies into sketches are the published implementation's, called rather than
 reimplemented. What this project adds surrounds the method: the sequencing that
 existed only as top-level script statements, where the finished repository and
 the tool's own record are written, which fields the request carries, what is
-counted, what bounds the run, that a stopped run still assembles, that one
-file's failure is not every file's, and that a phase's requests may overlap.
+counted, what bounds the run and where that bound is read, that a stopped run
+still assembles, that one file's failure is not every file's, that a phase's
+requests may overlap, and that a file sketch many prompts share is built once.
 
 The qualification that matters most is not in that list, and is stated again
 here because it is easily lost among the others: the model driven by this

@@ -22,8 +22,8 @@ description: >-
 
 run:
   jobs_dir: jobs
-  n_attempts: 2
-  n_concurrent_trials: 2
+  n_attempts: 1
+  n_concurrent_trials: 1
   artifacts:
     - /workspace
 
@@ -44,12 +44,15 @@ model:
 
 agent:
   import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
-  n_concurrent: 2
+  n_concurrent: 1
   # The revision of the code generation tool under evaluation. Pinning it here
-  # keeps the tool's version part of the recorded setup. This revision carries
-  # three patches over upstream, described in docs/latex/tool-modifications.tex.
-  repository: https://github.com/Tim-Dietrich/Self-collaboration-Code-Generation.git
-  commit: d5f8a2339bbabd5f892dcffd04469cdc512cb03a
+  # keeps the tool's version part of the recorded setup. It is the authors' own
+  # repository at its current head, with nothing of ours in it; what running it
+  # unmodified costs on a benchmark written from scratch, and what the test
+  # command below does about that, is described in
+  # docs/latex/tool-modifications.tex.
+  repository: https://github.com/YihongDong/Self-collaboration-Code-Generation.git
+  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
   hyperparameters:
     # Coder rounds. The Tester runs between rounds, so `max_rounds: 1` leaves
     # the team at Analyst -> Coder with no verification step at all.
@@ -58,27 +61,37 @@ agent:
     coder_steps: 15
     max_tokens: 8192
     temperature: 0.0
+    # Recorded, but inert on this revision: the tool declares `top_p` and sends
+    # it only from its non-agentic entry point, so the Analyst and the Coder
+    # sample at the provider's default. The value here is the tool's own
+    # default, so the record states an intent it does not misrepresent.
     top_p: 0.95
-    # Reasoning, pinned rather than inherited. Both models used here reason by
-    # default, so this fixes the current behaviour in place instead of leaving
-    # it to a provider default that is invisible in the record and free to
-    # change between runs. Set `enabled: false` for a no-reasoning ablation.
+    # Reasoning is deliberately not configured. The revision under evaluation
+    # sends no reasoning field on its tool-calling path, so how much the model
+    # reasons is the provider's default for it at that moment: set outside the
+    # experiment, absent from its written setup, and free to change between
+    # runs. Asking for it here with `reasoning_effort` or `request_extra` fails
+    # the run at startup rather than being silently dropped, which is the point
+    # — the alternative is a patched tool. What the model actually did is still
+    # recorded after the fact, as `reasoning_tokens` in the run's model usage.
     #
-    # Verified against OpenRouter for deepseek-v4-flash-0731 and kimi-k2.5:
-    # `reasoning.enabled` switches reasoning on and off on both, while
-    # `reasoning_effort` and `reasoning.effort` are accepted but produced no
-    # measurable change. `request_extra` is merged into the request body
-    # verbatim, so it also carries other providers' shapes; the OpenAI-
-    # compatible `reasoning_effort` field is available as a hyperparameter of
-    # its own. What actually happened is recorded as `reasoning_tokens` in the
-    # run's model usage, whichever is used.
-    request_extra:
-      reasoning:
-        enabled: false
     # What the Tester runs in the agent's own workspace between Coder rounds.
     # This exercises only the code and tests the agent wrote itself; the
     # benchmark's reference tests live in the tester sidecar and stay hidden.
     # Drop this key to disable the Tester phase.
+    #
+    # The first line is the one accommodation this experiment makes for running
+    # the tool unmodified, and it is made here rather than in the tool. The
+    # session decides whether the Coder produced anything by reading
+    # `git diff`, which on a project written from scratch reports nothing at
+    # all, because every generated file is untracked. Without this the Tester
+    # would discard a genuine test result on every round and substitute "No
+    # code changes were made", and could never report success.
+    # `--intent-to-add` registers the files with the index without committing
+    # them, which is what makes them visible to `git diff`. It runs before the
+    # tests rather than after, so that a test run which times out still leaves
+    # the workspace readable; build output is kept out of it by
+    # `.git/info/exclude`, written by run_self_collaboration.py.
     #
     # pytest exits 5 when it collects nothing, which the Tester reports as a
     # failure with no explanation, and the next Coder round is told its work
@@ -86,6 +99,7 @@ agent:
     # until the agent writes its tests, so the command says so explicitly.
     # The message goes to stderr, which the tool appends last, so it survives
     # the summarizer's fallback to the tail of the output.
+    #      git add --intent-to-add .
     test_command: |
       python -m pip install -e . -q
       python -m pytest -q --continue-on-collection-errors

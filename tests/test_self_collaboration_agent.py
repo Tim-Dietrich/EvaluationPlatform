@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from evaluation_platform.self_collaboration_agent import (
     HYPERPARAMETERS_PATH,
     OPENAI_PACKAGE,
     SELF_COLLABORATION_COMMIT,
+    SELF_COLLABORATION_REPOSITORY,
     TASK_INSTRUCTION_PATH,
     TASK_WORKSPACE,
     SelfCollaborationAgent,
@@ -21,6 +23,7 @@ from evaluation_platform.self_collaboration_agent import (
 from evaluation_platform import run_self_collaboration
 from evaluation_platform.model_usage import UsageTotals, record_response_usage
 from evaluation_platform.run_self_collaboration import (
+    _initialize_repository,
     _model_settings,
     _read_instruction,
     _usage_recording_call,
@@ -471,3 +474,76 @@ def test_an_unreadable_tool_repository_fails_instead_of_waiting_for_a_password(t
         command for command in environment.commands if "git clone" in command["command"]
     )
     assert clone["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_the_tool_is_pinned_to_the_authors_own_repository():
+    """The evaluated revision carries nothing of ours.
+
+    An earlier revision of this platform pinned a fork with three patches on
+    top of upstream. Those adapted the tool to tasks built from scratch, but
+    they also made the measured system a modified one; the accommodation this
+    platform still makes lives in the experiment's test command instead.
+    """
+    assert "YihongDong" in SELF_COLLABORATION_REPOSITORY
+    assert SELF_COLLABORATION_COMMIT == "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"
+
+
+def test_build_output_stays_out_of_the_repository_view_the_tool_reads(
+        tmp_path, monkeypatch
+):
+    """What `git add --intent-to-add` in the test command is allowed to register.
+
+    The tool reads `git diff` both to decide whether the Coder produced
+    anything and to show a later round what an earlier one did. The test
+    command registers the generated files so that command can see them; were
+    it to sweep up what `pip install` and `pytest` leave behind as well, a
+    round in which the Coder wrote nothing would still report work, and the
+    record of the previous attempt would be padded with build output.
+    """
+    monkeypatch.setattr(run_self_collaboration, "WORKSPACE", tmp_path)
+    _initialize_repository()
+
+    (tmp_path / "pyproject.toml").write_text("[project]", encoding="utf-8")
+    package = tmp_path / "src" / "library"
+    (package / "__pycache__").mkdir(parents=True)
+    (package / "__init__.py").write_text("value = 1", encoding="utf-8")
+    (package / "__pycache__" / "m.cpython-313.pyc").write_bytes(bytes(4))
+    egg_info = tmp_path / "src" / "library.egg-info"
+    egg_info.mkdir()
+    (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1", encoding="utf-8")
+
+    registered = _intent_to_add(tmp_path, "--name-only").split()
+
+    assert sorted(registered) == ["pyproject.toml", "src/library/__init__.py"]
+
+
+def test_build_output_alone_still_reads_as_no_code_changes(tmp_path, monkeypatch):
+    """The check the test command must not defeat.
+
+    The session substitutes a failure where it finds no change, which is what
+    stops a Coder that edited nothing from being credited with a passing test
+    run. Installing the package and running the tests leaves files behind on
+    its own, and those must not read as work.
+    """
+    monkeypatch.setattr(run_self_collaboration, "WORKSPACE", tmp_path)
+    _initialize_repository()
+
+    cache = tmp_path / "__pycache__"
+    cache.mkdir()
+    (cache / "m.cpython-313.pyc").write_bytes(bytes(4))
+
+    assert _intent_to_add(tmp_path).strip() == ""
+
+
+def _intent_to_add(workspace, *diff_arguments):
+    """Register untracked files as the experiment's test command does, then diff."""
+    subprocess.run(
+        ["git", "add", "--intent-to-add", "."], cwd=workspace, check=True
+    )
+    return subprocess.run(
+        ["git", "diff", *diff_arguments],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
