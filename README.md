@@ -129,12 +129,18 @@ about scope. `configs/nl2repobench-self-collaboration.yaml` runs all 104 tasks;
 `configs/math-verify-self-collaboration.yaml` is the same setup narrowed to one
 task for iterating cheaply.
 
-Comparing a second code generation solution means copying a configuration,
+Comparing a further code generation solution means copying a configuration,
 changing only the `agent` section, and leaving everything else byte-identical.
-`configs/math-verify-codeteam.yaml` is that: the same task, the same pinned
-benchmark version, and the same model as the Self-Collaboration configuration
-beside it, given to CodeTeam instead. A test asserts that those blocks agree,
-since that agreement is the entire basis for comparing their results.
+`configs/math-verify-codeteam.yaml` and `configs/math-verify-codes.yaml` are
+that: the same task, the same pinned benchmark version, and the same model as
+the Self-Collaboration configuration beside them, given to CodeTeam and to
+CodeS instead. A test asserts that those blocks agree across all three, since
+that agreement is the entire basis for comparing their results.
+
+Integrating a solution that is not yet here is a larger job than copying a
+configuration, and `docs/adding-a-solution.md` describes it: what the platform
+requires of a tool, the five files an integration adds, and the mistakes the
+earlier integrations made.
 
 A configuration may instead point at a single local task directory with
 `task: {path: ...}`, for a task authored by hand rather than taken from a
@@ -214,11 +220,11 @@ launched again.
 
 ## The code generation solutions
 
-Two are integrated. Each is a multi-agent method that receives the task's
-natural-language specification and an empty workspace, and each is driven by
-an adapter in `src/evaluation_platform/` that installs the tool in the task
-container, hands it the specification and the configured hyperparameters, and
-records what it spent. Neither adapter changes how the method works.
+Three are integrated. Each receives the task's natural-language specification
+and an empty workspace, and each is driven by an adapter in
+`src/evaluation_platform/` that installs the tool in the task container, hands
+it the specification and the configured hyperparameters, and records what it
+spent. No adapter changes how a method works.
 
 ### Self-Collaboration
 
@@ -269,6 +275,51 @@ and `max_token_budget` are the bound. Reaching either stops the run and is
 recorded as a failed agent run, and Harbor still grades whatever the workspace
 holds at that point.
 
+### CodeS
+
+A pipeline rather than a team, and the only one of the three that is not a
+conversation between agents. It writes the repository in three layers of
+sketch: RepoSketcher proposes the file tree from the specification,
+FileSketcher writes each Python file the tree names as signatures with empty
+bodies, and SketchFiller implements one function per request from that file's
+sketch and the sketches of the files it imports. A final stage parses each
+sketch, substitutes the bodies into it, and writes the result to the workspace.
+
+Two things about the tool decide how it is configured here.
+
+The first is that CodeS is published as a *fine-tuned model* together with the
+framework that prompts it, and its own inference driver runs that model locally
+through `transformers`, on a GPU, reaching no API at all. The tool also ships a
+driver that runs the same three phases against an OpenAI-compatible endpoint,
+and that is the one integrated: this platform supplies one credential and one
+base URL, and a comparison across solutions depends on all of them reaching the
+same provider the same way. What is measured here is therefore CodeS's
+multi-layer sketch driven by the experiment's model, not the fine-tuned model
+of the paper — a distinction worth keeping in view when reading a result.
+
+The second is that the length of a run is chosen by the model rather than by
+the configuration. There are no rounds and no roles to size: the cost of a task
+is one request, plus one for each Python file the first response named, plus
+one for every function those files declared. A specification that invites a
+wide design costs several times what a narrow one does, and nothing in the tool
+notices. Two settings follow from that:
+
+- `max_wall_clock_seconds` and `max_token_budget` are the bound, as for
+  CodeTeam, and they matter more here because there is no number of rounds to
+  lower instead. Unlike CodeTeam, which builds the repository as it goes, CodeS
+  assembles at the very end — so a run that stops early still writes what it
+  has, and a repository of correct interfaces with some bodies left as `pass`
+  is graded rather than discarded.
+- `concurrent_requests` is how many of one phase's requests are in flight at
+  once. The published pipeline is strictly sequential, which is the default of
+  `1`, and seventy-odd requests in sequence exceeds the task's agent timeout
+  before the pipeline can finish. Raising it is safe because of what the phases
+  are: every file sketch reads the one repository sketch, and every function
+  body reads the completed set of file sketches, so no request in a phase can
+  see another request in the same phase whatever the order. Note that it
+  multiplies with `agent.n_concurrent` rather than being capped by it — the
+  requests reaching the provider are the product of the two.
+
 ## Results and provenance
 
 Harbor writes each job beneath `jobs/`. Alongside Harbor's own records, each
@@ -290,9 +341,10 @@ run keeps the setup that produced it:
   own reasoning. Self-Collaboration writes `session-history.json`, the
   structured session including each round's test result; CodeTeam writes
   `codeteam/`, holding every architect's candidate design, the CTO's choice and
-  its rationale, the normalized plan, and the result of each QA round. These
-  are kept out of the workspace deliberately: they are evidence about the run,
-  not part of the repository being graded.
+  its rationale, the normalized plan, and the result of each QA round; CodeS
+  writes `codes/`, holding the prompt and answer of every request it made, one
+  file per phase. These are kept out of the workspace deliberately: they are
+  evidence about the run, not part of the repository being graded.
 - `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
   fraction of the task's reference tests that passed, consumed by Harbor.
 
@@ -309,7 +361,7 @@ show jobs created in this repository until it is restarted with the path above.
 
 The Harbor results view records the provider, model, and dataset label for each
 run, and aggregates uncached input, cached input, and output tokens across
-every model call a run made. Both solutions report this through the same
+every model call a run made. All three solutions report this through the same
 accounting, so the totals mean the same thing for each. Cost is recorded when the
 OpenAI-compatible API includes a `cost` value in its usage response; otherwise
 Harbor leaves Cost USD empty rather than estimating it from a potentially stale

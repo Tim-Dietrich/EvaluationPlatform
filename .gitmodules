@@ -4,3 +4,6 @@
 [submodule "code_generation/CodeTeam"]
 	path = code_generation/CodeTeam
 	url = https://github.com/WhitenWhiten/CodeTeam.git
+[submodule "code_generation/CodeS"]
+	path = code_generation/CodeS
+	url = https://github.com/NL2Code/CodeS.git

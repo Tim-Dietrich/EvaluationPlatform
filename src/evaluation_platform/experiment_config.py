@@ -169,9 +169,55 @@ CODE_TEAM = AgentHyperparameters(
     },
 )
 
+# CodeS: a multi-layer sketch rather than a team. RepoSketcher proposes the
+# file tree for the specification, FileSketcher writes each Python file as
+# signatures with empty bodies, and SketchFiller implements one function per
+# request from that file's sketch and the sketches it imports. There are no
+# roles to size and no rounds to bound, so what a configuration states about
+# CodeS is how a request is made rather than who makes it.
+#
+# The defaults are the tool's own, including the two it hardcodes in its
+# driver: five attempts per request, the first at `temperature` and the rest at
+# `retry_temperature`. `concurrent_requests` defaults to 1, which is the
+# published pipeline exactly — every request in sequence.
+#
+# Six hyperparameters have no default. `max_tokens` and `top_p` are absent from
+# the tool's own request, so leaving them out sends what it sends and lets the
+# provider decide; the budgets bound a pipeline that bounds nothing itself,
+# since the number of requests is the number of files and functions the model
+# chose to propose.
+CODE_S = AgentHyperparameters(
+    solution="CodeS",
+    types={
+        # How a request is made, and what happens when one fails.
+        "request_attempts": int,
+        "retry_temperature": float,
+        # How many of the requests within one phase are in flight at once. Both
+        # fan-out phases are batches of independent requests, so this changes
+        # how long a task takes and not what is asked.
+        "concurrent_requests": int,
+        # Sampling.
+        "max_tokens": int,
+        "temperature": float,
+        "top_p": float,
+        "reasoning_effort": str,
+        "request_extra": dict,
+        # The budgets that bound a pipeline whose length the model chooses.
+        "max_wall_clock_seconds": int,
+        "max_token_budget": int,
+    },
+    defaults={
+        "request_attempts": 5,
+        "temperature": 0.0,
+        "retry_temperature": 0.1,
+        "concurrent_requests": 1,
+    },
+)
+
 AGENT_HYPERPARAMETERS: dict[str, AgentHyperparameters] = {
     "evaluation_platform.self_collaboration_agent": SELF_COLLABORATION,
     "evaluation_platform.code_team_agent": CODE_TEAM,
+    "evaluation_platform.codes_agent": CODE_S,
 }
 
 # The retrieval backends CodeTeam's RAG client implements. `faiss_hnsw` is the

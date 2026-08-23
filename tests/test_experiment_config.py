@@ -380,27 +380,30 @@ def test_the_benchmark_configuration_runs_its_tasks_in_parallel():
     assert config.run["retry"]["max_retries"] >= 1
 
 
-def test_the_two_solutions_are_compared_on_the_same_benchmark_and_model():
-    """What makes the pair of math-verify configurations a comparison.
+@pytest.mark.parametrize(
+    "solution", ["math-verify-codeteam.yaml", "math-verify-codes.yaml"]
+)
+def test_the_solutions_are_compared_on_the_same_benchmark_and_model(solution):
+    """What makes the math-verify configurations a comparison.
 
     The benchmark and the model decide what the run is measured against
     rather than what is being measured. Where those differ, a difference in
     the result is no longer attributable to the solution. `run` is excluded
     deliberately: how many attempts to make and how many to run at once is how
-    much of the experiment to do, not what the experiment is, and the two
-    files are expected to differ there while one of them is being iterated on.
+    much of the experiment to do, not what the experiment is, and the files are
+    expected to differ there while one of them is being iterated on.
     """
     self_collaboration = yaml.safe_load(
         (ROOT / "configs" / "math-verify-self-collaboration.yaml").read_text(
             encoding="utf-8"
         )
     )
-    code_team = yaml.safe_load(
-        (ROOT / "configs" / "math-verify-codeteam.yaml").read_text(encoding="utf-8")
+    other = yaml.safe_load(
+        (ROOT / "configs" / solution).read_text(encoding="utf-8")
     )
 
-    assert code_team["benchmark"] == self_collaboration["benchmark"]
-    assert code_team["model"] == self_collaboration["model"]
+    assert other["benchmark"] == self_collaboration["benchmark"]
+    assert other["model"] == self_collaboration["model"]
 
 
 def test_the_shipped_codeteam_configuration_resolves_to_a_complete_setup():
@@ -414,12 +417,54 @@ def test_the_shipped_codeteam_configuration_resolves_to_a_complete_setup():
     # is planning and implementation with nothing verifying the result.
     assert hyperparameters["max_qa_rounds"] >= 1
     assert hyperparameters["architects"] >= 1
-    # Sampling matches the Self-Collaboration configuration rather than the
-    # tool's own default, so the comparison is not also one of temperature.
-    assert hyperparameters["temperature"] == 0.0
+    # Reasoning is pinned rather than inherited. Left unset, how much the model
+    # reasons is the provider's default for it at that moment: set outside the
+    # experiment, absent from its record, and free to change between runs.
+    # Sampling is deliberately not asserted here; the configuration says which
+    # values it uses and why, and iterating on them is expected.
+    assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
     # A budget, because the tool has no bound of its own on what a task costs.
     assert hyperparameters["max_wall_clock_seconds"] >= 1
     assert hyperparameters["max_token_budget"] >= 1
+
+
+def test_the_shipped_codes_configuration_resolves_to_a_complete_setup():
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-codes.yaml", ENVIRONMENT
+    )
+
+    hyperparameters = config.hyperparameters
+    assert config.agent_import_path.startswith("evaluation_platform.codes_agent")
+    # Reasoning is pinned rather than inherited, as in the two configurations
+    # beside this one. Left unset, how much the model reasons is the provider's
+    # default for it at that moment: set outside the experiment, absent from
+    # its record, and free to change between runs.
+    assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
+    # A response truncated mid-definition does not fail a test, it fails to
+    # parse, and CodeS returns a whole file or a whole function per response.
+    assert hyperparameters["max_tokens"] >= 8192
+    # A budget, because the tool has no bound of its own on what a task costs,
+    # and unlike the other two solutions its length is chosen by the model
+    # rather than by a number of rounds a configuration could lower.
+    assert hyperparameters["max_wall_clock_seconds"] >= 1
+    assert hyperparameters["max_token_budget"] >= 1
+
+
+def test_the_codes_configuration_stays_within_the_provider_limit_it_declares():
+    """Two concurrency limits multiply for CodeS, where elsewhere there is one.
+
+    `agent.n_concurrent` caps how many trials call the model at once, and
+    `concurrent_requests` is a second multiplier inside each of them. Their
+    product is what reaches the provider, which is worth stating where the
+    configuration is read rather than discovering as a rate limit.
+    """
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-codes.yaml", ENVIRONMENT
+    )
+
+    assert config.agent_n_concurrent is not None
+    assert config.agent_n_concurrent <= config.run["n_concurrent_trials"]
+    assert config.hyperparameters["concurrent_requests"] >= 1
 
 
 def test_hyperparameters_are_validated_against_the_solution_that_will_run(tmp_path):

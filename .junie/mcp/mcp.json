@@ -2,6 +2,12 @@
     "mcpServers": {
         "JetBrains IDE": {
             "url": "http://127.0.0.1:64342/sse"
+        },
+        "pycharm": {
+            "url": "http://localhost:64342/sse",
+            "headers": {
+                "IJ_MCP_SERVER_PROJECT_PATH": "C:\\Code\\EvaluationPlatform"
+            }
         }
     }
 }

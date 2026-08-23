@@ -1,0 +1,139 @@
+# Experiment setup: CodeS on a single NL2RepoBench task.
+#
+# This is the third code generation solution evaluated in this repository, and
+# it is the counterpart of `math-verify-self-collaboration.yaml` and
+# `math-verify-codeteam.yaml`: the same benchmark, the same task, the same
+# model backend. The `benchmark` and `model` blocks are byte-identical to those
+# files, so a difference between the three runs is a difference between the
+# three solutions rather than between three setups. The `run` block is the
+# exception, and is not part of that claim: how many attempts to make and how
+# many to run at once is how much of the experiment to do rather than what it
+# measures.
+#
+# Everything that changes what a run does belongs in a file under `configs/`.
+# Launch it with `python main.py --config configs/math-verify-codes.yaml`; the
+# launcher archives the resolved setup as `jobs/<job>/experiment-config.yaml`,
+# so any recorded result can be traced back to the configuration that produced
+# it. `.env` holds credentials only.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: math-verify-codes
+description: >-
+  CodeS (RepoSketcher -> FileSketcher -> SketchFiller) generates the
+  math-verify library from NL2RepoBench's natural-language specification. The
+  hidden reference tests stay in the tester sidecar and are never visible to
+  the agent; the reward is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 1
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+
+agent:
+  import_path: evaluation_platform.codes_agent:CodeSAgent
+  # How many trials may call the model at once. `concurrent_requests` below is
+  # a second multiplier inside each of them, so the requests in flight against
+  # the provider are the product of the two, not either one alone.
+  n_concurrent: 1
+  # The revision of the code generation tool under evaluation. Pinning it here
+  # keeps the tool's version part of the recorded setup. No file of CodeS is
+  # modified for this project — what is supplied around it is described in
+  # docs/latex/tool-modifications.tex — so this names the authors' repository
+  # rather than a fork of it. A fork is one line here once there is something
+  # in it, and it has to be readable without credentials: the task container
+  # has none, and a private repository fails the clone rather than the run.
+  repository: https://github.com/NL2Code/CodeS.git
+  commit: 0b624ab4ef22b0d9d223f274a986eb27fe090c88
+  hyperparameters:
+    # CodeS is a pipeline rather than a team, so there are no roles to size and
+    # no rounds to bound. Its shape is decided by the model instead: the
+    # repository sketch names the files, each Python file among them costs one
+    # file-sketch request, and every function declared in those sketches costs
+    # one more. A specification that invites a wide design therefore costs
+    # several times what a narrow one does, and nothing in the tool notices.
+    #
+    # What a configuration states about CodeS is accordingly how a request is
+    # made, how many are in flight, and when to stop.
+
+    # Requests. Five attempts, the first at `temperature` and the rest at
+    # `retry_temperature`, are the tool's own figures, hardcoded in its driver
+    # and written out here so they are part of the record and can be varied.
+    # `temperature: 0.0` is the tool's own first-attempt setting, and it
+    # happens to match the Self-Collaboration configuration beside it, so
+    # those two runs differ in method and not in sampling.
+    request_attempts: 5
+    temperature: 0.0
+    retry_temperature: 0.1
+
+    # `top_p` and `max_tokens` are absent from the request the tool builds, so
+    # omitting them here reproduces it exactly and lets the provider decide
+    # both. Both are set instead, for the two reasons the other configurations
+    # give: `top_p` because sampling that is not pinned is not part of the
+    # record, and `max_tokens` because of how CodeS writes code. FileSketcher
+    # returns a whole file of signatures in one response and SketchFiller
+    # returns a whole function, and a response truncated mid-definition does
+    # not fail a test — it fails to parse, and the file it belonged to is
+    # written as an unfilled sketch instead.
+    max_tokens: 16000
+    top_p: 0.95
+
+    # Reasoning, pinned rather than inherited, exactly as in the two
+    # configurations beside this one. CodeS sends no reasoning setting of its
+    # own, so without this the amount of reasoning is whatever the provider
+    # defaults to for the model at that moment — invisible in the record and
+    # free to change between runs. `request_extra` is merged into the request
+    # body verbatim, so it carries OpenRouter's `reasoning` object as well as
+    # other providers' shapes; the OpenAI-compatible `reasoning_effort` field
+    # is available as a hyperparameter of its own. What actually happened is
+    # recorded as `reasoning_tokens` in the run's model usage.
+    request_extra:
+      reasoning:
+        enabled: false
+
+    # How many of one phase's requests are in flight at once. The published
+    # pipeline is strictly sequential, which is what `1` — the default — does.
+    # It is raised here because of the arithmetic above: a repository of ten
+    # modules declaring sixty functions is seventy-one requests, and in
+    # sequence that exceeds the task's own agent timeout before the pipeline
+    # can finish, which scores as an error rather than as a poor repository.
+    #
+    # This is safe to vary because of what the phases are. Every file sketch
+    # reads the one repository sketch, and every function body reads the
+    # completed set of file sketches, so no request in a phase can see another
+    # request in the same phase whatever the order. Raising it changes how long
+    # a task takes and not what any prompt says. Lower it to 1 to run the
+    # published pipeline exactly, and note that the provider sees this many
+    # requests per trial times `n_concurrent` trials.
+    concurrent_requests: 4
+
+    # Budgets. CodeS has no bound of its own on what a task costs, and unlike
+    # the other two solutions it cannot be bounded by asking for fewer rounds:
+    # the number of requests is a property of the design the model proposed in
+    # its first response. Without a budget the only limit is the task's own
+    # agent timeout, and a trial that reaches that is scored as an error with
+    # nothing to show. These stop the run first; whatever the pipeline has
+    # produced by then is still assembled into the workspace, so a repository
+    # of correct interfaces with some bodies unfilled is graded rather than
+    # discarded.
+    max_wall_clock_seconds: 3600
+    max_token_budget: 2000000

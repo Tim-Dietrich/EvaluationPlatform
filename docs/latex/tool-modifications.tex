@@ -403,3 +403,292 @@ and what bounds the run. The three components the paper ablates --- retrieval
 grounding, dynamic developer allocation, and Git-based coordination --- are
 exposed as settings of the experiment configuration, each recorded with the run
 it produced.
+
+\section{Adapting CodeS}
+
+The third solution under evaluation is CodeS, which is not a team but a
+pipeline. It decomposes the construction of a repository into three layers of
+sketch: a \emph{RepoSketcher} proposes the file tree implied by the
+requirements, a \emph{FileSketcher} writes each Python file that tree names as
+signatures with empty bodies, and a \emph{SketchFiller} implements one function
+per request, given that file's sketch and the sketches of the files it imports.
+A final stage parses each sketch, substitutes the generated bodies into it, and
+writes the result to disk. No agent talks to another and nothing is revised: a
+request is made once, in one of three shapes, and the pipeline runs forward.
+
+As with CodeTeam, the implementation we evaluate is the authors' own repository
+at a pinned revision rather than a fork, and no file of CodeS is modified. The
+account below is longer than CodeTeam's nonetheless, and for a reason that has
+nothing to do with the quality of the implementation. CodeTeam ships a program;
+CodeS ships a research artefact, in which the pipeline is expressed as a script
+rather than as a library, and in which the method as published is a fine-tuned
+model as much as it is the framework around it. Both facts bear on what a
+result obtained here can be said to be about, and the first two subsections are
+therefore about what is being measured rather than about how.
+
+\subsection{Which CodeS Is Evaluated}
+
+CodeS is published as a fine-tuned model together with the framework that
+prompts it. The paper's contribution is both: the multi-layer sketch is the
+decomposition, and the released checkpoints are models trained on instruction
+data extracted from a hundred public repositories to answer each of the three
+layers in turn.
+
+The tool accordingly ships two drivers for the same pipeline. Its principal one
+loads the fine-tuned checkpoint locally through \texttt{transformers} and
+generates with a text-generation pipeline on a GPU; it reaches no API of any
+kind. Its second, distributed among the baselines, runs the identical three
+phases against an OpenAI-compatible endpoint, calling the same phase helpers
+and the same assembly stage, and differing only in the prompt wording that a
+chat model rather than a completion-trained one requires.
+
+We integrate the second. The reason is the platform's, not the method's: this
+harness supplies one credential and one base URL, and a comparison across
+solutions rests on all of them reaching the same provider in the same way. A
+locally hosted checkpoint would be a second model backend in an experiment
+whose entire design is that the model is held constant.
+
+The consequence must be stated plainly, because it is the largest single
+qualification on any result reported for this solution. What is measured here
+is CodeS's multi-layer sketch driven by the same general-purpose model as the
+other two solutions --- which is a configuration the paper itself reports ---
+and not the fine-tuned CodeS model. A comparison drawn here is therefore
+between three frameworks at one model, and it is silent on the contribution of
+the training that gives CodeS its name. We regard this as the right comparison
+for this work, since the other two solutions are prompting frameworks over a
+general-purpose model and nothing else would place them on the same axis, but
+it is a narrower claim than ``CodeS was evaluated'' and should not be reported
+as the wider one.
+
+\subsection{Driving a Script}
+
+The driver we integrate is a script and not a library. Its prompt templates,
+its argument parsing, its three-phase loop and its output paths are all
+statements at module scope, so that importing it parses a command line, opens
+files relative to the working directory, and begins making requests. There is
+no function to call.
+
+Our runner therefore repeats the loop and takes everything else from the tool.
+The decomposition is not reimplemented: which paths the repository sketch
+names, which of them are sketched, which functions are asked for, what context
+each prompt carries, how a response is parsed, and how the answers are
+assembled into files are all calls into CodeS's own modules, unchanged. What
+the runner supplies is the sequencing between those calls, which is the part
+that existed only as top-level statements.
+
+The prompts are the one thing that could not be reached by a call, and copying
+them into this repository was rejected. A copy would be free to disagree with
+the revision a configuration pins, and nothing in the record would say which of
+the two a run had used --- precisely the failure that pinning a revision exists
+to prevent. The runner instead reads the driver's source, locates the literal
+assignment that holds the templates, and evaluates that assignment alone
+without executing the module. The prompts a run used are thus the pinned
+revision's by construction, and a revision that no longer carries them fails
+immediately and says so rather than falling back to a stale copy.
+
+\subsection{Where the Generated Repository Is Written}
+
+The argument is CodeTeam's, and the mechanism differs. CodeS's assembly stage
+writes each repository into a directory named after it, one level below the
+output directory it is given, which suits its own evaluation --- a hundred
+generated repositories side by side for scoring. Harbor grades
+\texttt{/workspace} itself, so a project written one level down would be scored
+as an empty repository rather than reported as misplaced.
+
+Unlike CodeTeam, whose generation root is decided by a single method we could
+override, CodeS decides it in the loop of its assembly stage, which is again
+top-level script code. Our runner therefore calls the three functions that
+stage is built from --- the one that reads the file sketches, the one that
+groups the generated bodies by file, and the one that substitutes the bodies
+into a sketch --- and writes the results itself. The substitution logic, which
+is the part that matters, is the tool's and is untouched.
+
+Two safeguards are added at the point of writing. The paths come from a file
+tree the model wrote, so a path that resolves outside the workspace is dropped
+and named in the run's record rather than written where it points; and each
+file is assembled independently, for the reason a later subsection gives.
+
+\subsection{Where the Tool's Own Record Is Written}
+
+CodeS records each phase as a file of prompts and answers: the repository
+sketch it proposed, the sketch of every file, and every function it filled in.
+It writes them into the directory it generates into, which under the
+arrangement above would place them inside the repository being graded, where
+the verifier would copy them onto the benchmark's reference tests. They are
+directed to the job's log directory instead, alongside the run's console
+output.
+
+The record is more valuable for this solution than for the others, and is worth
+keeping rather than merely relocating. CodeS never revises: a function is asked
+for once and the answer is used. The prompt that produced a given function is
+thus the complete explanation of it, and the assembled repository is a
+deterministic function of these files.
+
+\subsection{Sampling and Reasoning Parameters}
+
+The tool's driver sends a request carrying the model, the messages, and a
+temperature, and nothing else. It gives each request five attempts, the first
+at temperature $0.0$ and the remainder at $0.1$, and calls \texttt{exit(1)}
+when all five are refused. Every one of those figures is a literal in the
+script.
+
+Three things follow. The sampling of a run could not be part of its recorded
+setup, since neither the temperatures nor the attempt count is reachable from
+outside; they are hyperparameters here, defaulting to the tool's own values, so
+that a configuration stating nothing reproduces the published behaviour and one
+stating something records what it changed. Second, \texttt{top\_p} is never
+sent, so that dimension of sampling is the provider's default: a quantity set
+outside the experiment and absent from its record. Third, no reasoning field is
+ever sent, with the consequence described at length for the other two
+solutions.
+
+A fourth omission is specific to this method. The driver sends no token limit,
+so the length of a response is bounded by whatever the provider defaults to.
+For a solution that returns a patch this is a minor risk; for CodeS it is not,
+because a response is a whole file sketch or a whole function. A response
+truncated mid-definition does not produce a weaker implementation --- it
+produces text that does not parse, and the file it belonged to is written as an
+unfilled sketch instead. Our configurations set a limit for that reason.
+
+All four are supplied by constructing the request the tool constructs and
+adding the fields it omits, each omitted again when unset, so that a
+configuration that states nothing about them sends exactly the request the tool
+would have sent.
+
+\subsection{Usage and Rate Limits}
+
+CodeS records nothing at all about what it spends. The usage accounting is
+therefore entirely supplied, through the same shared implementation the other
+two solutions use, for the reason given there: a token, a cached token and a
+dollar must mean the same thing on both sides of a comparison.
+
+The tool's own retry loop needed one change. It retries any failed request,
+which already covers a throttled one, but it retries immediately --- so a
+provider briefly out of capacity is met with five requests in a few seconds and
+the trial is lost. We insert a wait before an attempt that follows a throttled
+one, and deliberately inside the tool's attempt count rather than beside it, so
+that a rate limit costs time and not a multiple of the requests the
+configuration asked for. A failure that is not a rate limit is retried
+immediately, as before, since a rejected credential or an unknown model will be
+refused just as quickly the second time.
+
+One further condition is treated as a failed attempt rather than as an answer.
+A response whose content is empty --- filtered, truncated before any text, or
+consisting of reasoning with nothing after it --- would otherwise be parsed
+into an empty file sketch or an empty function body and carried forward as
+though the model had answered. Retrying costs one request; not retrying costs
+the file.
+
+\subsection{Budgets, and What a Stopped Run Leaves Behind}
+
+CodeS has no bound of its own on what a task costs, and unlike the other two
+solutions it cannot be bounded by asking for fewer rounds. Its length is a
+property of the design the model proposed in its first response: one request,
+plus one for each Python file the repository sketch named, plus one for every
+function those file sketches declared. A specification that invites a wide
+design costs several times what a narrow one does. As with CodeTeam we set a
+wall-clock budget and a token budget in the experiment configuration, where
+they are recorded with the run and can be varied.
+
+The budget interacts with a structural property of this method that required a
+change. CodeTeam builds the repository as it goes, so a run stopped part-way
+has already written files. CodeS assembles only at the very end, so a run
+stopped part-way has written nothing --- and its assembly stage, given a record
+of a request that was never answered, fails on that record and produces no
+repository at all. The whole of a run's expenditure would be lost to the
+requests it did not make.
+
+The runner therefore always assembles, whether the pipeline finished, exhausted
+its budget, or failed outright, and passes the assembly stage only the requests
+that were answered. This is less a change of behaviour than a restoration of
+one: the tool appends each answer to these files as it arrives, so an
+interrupted run of the tool leaves exactly the files we construct, and our
+writing them once at the end is what introduced the discrepancy. What a stopped
+run leaves is a repository of correct interfaces with some bodies left as
+\texttt{pass}, which the verifier can grade, in place of an empty workspace
+which it can only score as nothing.
+
+\subsection{Containing a Failure to the File It Came From}
+
+Two places in the tool process every file in a single unguarded loop, so that
+one file ends the loop and takes the rest with it.
+
+The first is the construction of the third phase's prompts, which parses each
+file sketch to find the functions it declares. The tool tolerates a sketch that
+is merely truncated, trimming lines until what remains parses, but a sketch
+malformed in other ways raises out of the loop and the remaining files never
+have their function bodies requested. The second is the assembly stage, where a
+sketch that defeats the substitution ends the assembly with the repository
+partly written.
+
+Each is enclosed so that the failure costs the file it came from and no other:
+in the first case that file's functions are not requested, and in the second
+the file is written as the sketch FileSketcher produced rather than not written
+at all. Both counts are recorded with the run, so a repository that is thin
+because of this is distinguishable after the fact from one that is thin because
+the model proposed little. We report these as modifications, though they add no
+capability and change no output the tool would itself have produced, because
+their effect on a measured score is not small: under the unmodified control
+flow a single malformed response can reduce a run to an empty repository.
+
+\subsection{Concurrency Within a Phase}
+
+The published pipeline is strictly sequential, and a repository of ten modules
+declaring sixty functions is seventy-one requests. In sequence that exceeds the
+agent timeout of the tasks used here before the pipeline can finish, which is
+scored as an error rather than as a poor repository --- a measurement of the
+harness rather than of the method.
+
+We therefore allow the requests within one phase to be in flight together, as a
+configuration setting whose default is $1$, which is the published pipeline
+exactly. This is admissible because of what the phases are, and would not be
+admissible for either other solution: every file sketch reads the one
+repository sketch and nothing else, and every function body reads the completed
+set of file sketches, which the tool itself collects before the third phase
+begins. No request in a phase can observe another request in the same phase
+under any ordering, so the set of prompts sent and the mapping from prompts to
+answers are unchanged; what changes is how long the phase takes. The records
+are kept in the order the sequential driver would have produced them.
+
+The value used is recorded with each run and reported with our results, since
+it is a deviation from the published pipeline even though it is one we can
+argue is inert.
+
+\subsection{The Runtime the Tool Requires}
+
+Two properties of the checkout are worth recording, since both bear on
+reproducing a run rather than on the method.
+
+CodeS builds and inspects syntax trees using \texttt{ast.Str}, an alias Python
+deprecated in version 3.8 and removed in 3.14. Where it is absent the tool
+raises from inside the prompt construction of its third phase, after the
+repository sketch and every file sketch have already been paid for. The runner
+checks for it before making any request and fails with that explanation
+instead, and the task image is accordingly required to carry Python 3.13 or
+older for this solution.
+
+The repository is also large for what a run reads: it carries the hundred
+public repositories its training data was extracted from and the hundred more
+its benchmark grades, none of which any run opens, and every trial clones it.
+The clone is made partial and sparse, fetching the commits and trees but file
+contents only for the directory the pipeline reads. This narrows the working
+tree and not the revision, which is pinned exactly as before, and reduces a
+per-trial cost that a benchmark run pays several hundred times.
+
+\subsection{Scope of the Intervention}
+
+No file of CodeS is modified. The three prompts are read from the pinned
+revision rather than reproduced, and the decomposition, the parsing of each
+response, the selection of context for each prompt and the substitution of
+bodies into sketches are the published implementation's, called rather than
+reimplemented. What this project adds surrounds the method: the sequencing that
+existed only as top-level script statements, where the finished repository and
+the tool's own record are written, which fields the request carries, what is
+counted, what bounds the run, that a stopped run still assembles, that one
+file's failure is not every file's, and that a phase's requests may overlap.
+
+The qualification that matters most is not in that list, and is stated again
+here because it is easily lost among the others: the model driven by this
+framework is the experiment's model and not the fine-tuned model the paper
+released. A result reported for this solution is a result for the multi-layer
+sketch, at the model held constant across the comparison.

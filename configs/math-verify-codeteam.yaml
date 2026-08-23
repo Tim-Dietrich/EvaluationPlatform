@@ -111,10 +111,17 @@ agent:
     rag_backend: faiss_hnsw
     rag_top_k: 5
 
-    # Sampling. `temperature: 0.0` matches the Self-Collaboration
-    # configuration rather than CodeTeam's own default of 0.2, so that the
-    # comparison between the two solutions is not also a comparison between
-    # two sampling settings.
+    # Sampling. `temperature` is CodeTeam's own default rather than the 0.0 of
+    # the Self-Collaboration configuration beside it, so a comparison across
+    # the two carries a difference in sampling as well as in method. Evaluating
+    # each method at the sampling its authors chose is defensible, but it is a
+    # choice, and it is the one thing these two configurations do not hold
+    # constant; set it to 0.0 to remove the confound.
+    #
+    # `max_tokens` is well above the tool's default because of how CodeTeam
+    # writes code: a Developer returns one complete source file per response,
+    # so a budget that comfortably fits a patch does not fit a module, and a
+    # file truncated mid-definition fails to parse rather than failing a test.
     max_tokens: 16000
     temperature: 0.2
     top_p: 0.95
