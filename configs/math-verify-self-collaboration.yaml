@@ -99,8 +99,8 @@ agent:
     # until the agent writes its tests, so the command says so explicitly.
     # The message goes to stderr, which the tool appends last, so it survives
     # the summarizer's fallback to the tail of the output.
-    #      git add --intent-to-add .
     test_command: |
+      git add --intent-to-add .
       python -m pip install -e . -q
       python -m pytest -q --continue-on-collection-errors
       status=$?
