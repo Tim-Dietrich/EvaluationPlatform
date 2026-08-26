@@ -9,6 +9,7 @@ from harbor.models.agent.context import AgentContext
 
 from evaluation_platform.experiment_config import SELF_COLLABORATION
 from evaluation_platform.model_usage import populate_usage_context
+from evaluation_platform.self_collaboration_trajectory import write_trajectory
 
 # The authors' own repository at its current head, evaluated unmodified.
 # An earlier revision of this platform pinned a fork carrying three patches
@@ -39,6 +40,11 @@ class SelfCollaborationAgent(BaseInstalledAgent):
     `kwargs`, which Harbor records in the job's `config.json`.
     """
 
+    # The run is recorded as a trajectory after the fact, by converting the
+    # session history the tool already writes. `self_collaboration_trajectory`
+    # describes what that conversion can and cannot recover.
+    SUPPORTS_ATIF: bool = True
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         hyperparameters = {
             name: kwargs.pop(name)
@@ -50,6 +56,11 @@ class SelfCollaborationAgent(BaseInstalledAgent):
         SELF_COLLABORATION.reject_foreign(kwargs)
         super().__init__(*args, **kwargs)
         self.hyperparameters = SELF_COLLABORATION.resolve(hyperparameters)
+        # Kept from `run` so that the trajectory written afterwards can open on
+        # the task the solution was given. The session history the tool writes
+        # does not record it, and the conversion happens after the container is
+        # gone, so this is the only place it survives.
+        self.instruction: str | None = None
 
     @staticmethod
     def name() -> str:
@@ -95,6 +106,7 @@ class SelfCollaborationAgent(BaseInstalledAgent):
             environment: BaseEnvironment,
             context: AgentContext,
     ) -> None:
+        self.instruction = instruction
         with TemporaryDirectory() as temp_dir:
             instruction_source = Path(temp_dir) / "task-instruction.md"
             instruction_source.write_text(instruction, encoding="utf-8")
@@ -128,3 +140,11 @@ class SelfCollaborationAgent(BaseInstalledAgent):
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         populate_usage_context(context, self.logs_dir / USAGE_FILENAME)
+        # Harbor has synced the trial's logs back by now, so the files the
+        # runner wrote inside the container are readable here.
+        write_trajectory(
+            self.logs_dir,
+            instruction=self.instruction,
+            session_id=self.session_id,
+            logger=self.logger,
+        )

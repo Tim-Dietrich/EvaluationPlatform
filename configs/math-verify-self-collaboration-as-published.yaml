@@ -1,0 +1,145 @@
+# Experiment setup: one Self-Collaboration attempt on the NL2RepoBench
+# math-verify task, with the tool's own logic left entirely alone.
+#
+# This is the control for `math-verify-self-collaboration.yaml`. Both run the
+# authors' implementation at the same commit, unpatched, on the same task with
+# the same hyperparameters; they differ only in what the harness does around
+# it. The other configuration makes two accommodations from outside the tool,
+# because the tool was written for repair tasks and this benchmark builds a
+# project from scratch. This one makes neither, and accepts the result. What
+# the accommodations are for is described in docs/latex/tool-modifications.tex;
+# what dropping them costs is described below.
+#
+# Everything that changes what a run does belongs in a file under `configs/`.
+# Launch it with `python main.py --config configs/<name>.yaml`; the launcher
+# archives the resolved setup as `jobs/<job>/experiment-config.yaml`, so any
+# recorded result can be traced back to the configuration that produced it.
+# `.env` holds credentials only.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: math-verify-self-collaboration-as-published
+description: >-
+  Self-Collaboration (Analyst -> Coder <-> Tester) generates the math-verify
+  library from NL2RepoBench's natural-language specification, with nothing in
+  the harness compensating for the tool's assumption that the repository
+  already exists. The Tester runs the tests and the tool then discards the
+  result, so this measures the published implementation's behaviour on a task
+  of this shape rather than its best achievable score.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 1
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  # Which of the aggregator's servers may answer. A model name does not name a
+  # server: OpenRouter offers this model from more than twenty providers that
+  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
+  # very different speeds, and its default route is chosen by price. Unpinned,
+  # two arms of this comparison can run the same model at different numerical
+  # precision, and so can two requests inside one arm, with nothing recording
+  # which. That is a confound in the one variable every configuration here
+  # holds constant, so it is pinned beside the model rather than left to the
+  # aggregator, and it belongs in `model` rather than in any solution's
+  # hyperparameters because it is not a property of a method. The test that
+  # requires these blocks to agree across configurations is therefore the test
+  # that keeps every arm on one server.
+  #
+  # Measured on 2026-08-26, one 500-token generation each: the default route
+  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
+  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
+  # tokens, the best speed for the money among the endpoints this account may
+  # use. siliconflow/fp8 is the named second choice because it is the only
+  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
+  # precision this pin exists to fix; `allow_fallbacks: false` stops the
+  # aggregator substituting anything outside the pair.
+  #
+  # These tags name endpoints *of the model above*. Changing the model means
+  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
+  # on offer, with each endpoint's quantization and price.
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+
+agent:
+  import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
+  n_concurrent: 1
+  # The same revision the accommodated configuration evaluates: the authors'
+  # own repository at its current head, with nothing of ours in it. The two
+  # configurations are comparable because this line is identical in both.
+  repository: https://github.com/YihongDong/Self-collaboration-Code-Generation.git
+  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
+  hyperparameters:
+    # Every value below is the implementation's own default:
+    # `SelfCollabSession` defaults to max_round=3, analyst_steps=10 and
+    # coder_steps=15, and its `ANALYST_CONFIG` and `CODER_CONFIG` to 8192
+    # tokens at temperature 0.0 and top_p 0.95. Nothing here is tuned.
+    max_rounds: 3
+    analyst_steps: 10
+    coder_steps: 15
+    max_tokens: 8192
+    temperature: 0.0
+    # Inert on this revision, as in the accommodated configuration: the tool
+    # declares `top_p` and sends it only from its non-agentic entry point, so
+    # the Analyst and the Coder sample at the provider's default.
+    top_p: 0.95
+    # Reasoning is not configured, for the same reason as in the accommodated
+    # configuration: this revision sends no reasoning field on its tool-calling
+    # path, and asking for one here fails the run at startup rather than being
+    # silently dropped. What the model actually did is recorded after the fact
+    # as `reasoning_tokens` in the run's model usage.
+    #
+    # What the Tester runs between Coder rounds, and the whole of the
+    # difference from `math-verify-self-collaboration.yaml`. Two things the
+    # other configuration puts here are deliberately absent:
+    #
+    # `git add --intent-to-add .` is not run. The tool decides whether the
+    # Coder produced anything by reading `git diff`, which reports unstaged
+    # changes to tracked files and therefore reports nothing at all about a
+    # project that is entirely untracked. Without the registration, the
+    # Tester's real result is discarded on every round and replaced by the
+    # synthetic failure "No code changes were made — nothing to test.", the
+    # Tester can never report success however good the code is, and each later
+    # Coder round is told its predecessor's work does not exist while being
+    # instructed not to repeat it. That is the published implementation's
+    # behaviour on a task of this shape, and reproducing it is the point of
+    # this configuration. It also makes the `.git/info/exclude` patterns that
+    # run_self_collaboration.py writes inert, since nothing is ever staged for
+    # them to keep out.
+    #
+    # No message is added for pytest's exit code 5, which it returns when it
+    # collects no tests — the normal state of a project built from scratch
+    # until the agent writes a suite. The tool reports that to the next Coder
+    # round as an unexplained failure. Explaining it would be feedback the
+    # implementation does not produce.
+    #
+    # What remains is an install and a test run, which the caller has to supply
+    # because the tool takes its test command from whoever invokes it. The
+    # pytest flags are the authors' own `_TEST_PYTEST` from `run_swe.py`,
+    # without the FAIL_TO_PASS test names that this benchmark does not have.
+    # The install is the authors' own too, from their `REPO_SPECS`; they run it
+    # once before the session, which is impossible here, since the package does
+    # not exist until the Coder writes it.
+    test_command: |
+      python -m pip install -e . -q
+      python -m pytest --no-header -rA --tb=short -p no:cacheprovider
