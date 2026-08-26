@@ -93,7 +93,7 @@ class CodeTeamAgent(BaseInstalledAgent):
             # reporting in seconds that it could not read the repository.
             env=GIT_NON_INTERACTIVE,
         )
-        for module in ("run_code_team.py", "model_usage.py"):
+        for module in ("run_code_team.py", "model_usage.py", "model_routing.py"):
             await self._upload_agent_owned_file(
                 environment,
                 Path(__file__).with_name(module),
@@ -140,7 +140,7 @@ class CodeTeamAgent(BaseInstalledAgent):
             await self.exec_as_agent(
                 environment,
                 command=(
-                    "python /installed-agent/run_code_team.py "
+                    "python -u /installed-agent/run_code_team.py "
                     "2>&1 | tee /logs/agent/code-team.log"
                 ),
                 env={

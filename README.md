@@ -100,6 +100,54 @@ be temporarily rate-limited even with a valid key. The adapter waits and retries
 after the tool has exhausted its own attempts; if every one is throttled, the
 job log reports the rate limit and the affected model explicitly.
 
+## Which server answers
+
+A model name does not name a server. OpenRouter offers one model from more
+than twenty providers, and they are not interchangeable: they serve different
+quantizations of the same weights — fp4, fp8, bf16 — at very different speeds
+and prices, and the default route is chosen by price. Left alone, two arms of a
+comparison can run the same model at different numerical precision, and so can
+two requests inside one arm, with nothing recording which.
+
+That is a confound in the one variable every configuration here holds constant,
+so `model.routing` pins it:
+
+```yaml
+model:
+  name: ${MODEL:-...}
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+```
+
+It sits in `model` rather than in any solution's hyperparameters because it is
+not a property of a method, and the test that requires the model blocks to
+agree across configurations is therefore the test that keeps every arm on one
+server. An unknown routing key is rejected before Docker starts: the API
+accepts one and ignores it, which would leave a run routed by price while its
+record said otherwise.
+
+The directive reaches every arm the same way, as `MODEL_ROUTING`, and enters
+the request as its `provider` field by whichever of two routes fits the
+solution. Where this platform builds the request body it is merged in; where
+the tool builds its own, `model_routing.py` wraps the OpenAI client so every
+request carries it. The second exists so that no published tool has to be
+modified to take part: what changes is the server a request is sent to, not its
+messages, its sampling, or the model that answers it. Terminus, which reaches
+the provider through LiteLLM rather than the OpenAI client, is given the same
+directive through Harbor's own `extra_body`.
+
+Pinning states an intent, so each run also records which server actually
+answered, as `providers_served` in its `resolved-setup.json`. A run whose
+directive named one endpoint and whose responses came from another is a run
+that did not measure what its setup says.
+
+Endpoint tags name endpoints *of the configured model*, so changing the model
+means choosing them again. `GET /api/v1/models/<model>/endpoints` lists what is
+on offer with each endpoint's quantization, price and uptime.
+
 ## Benchmarks
 
 The `benchmark` block of a configuration is what makes a run comparable:
@@ -134,8 +182,10 @@ changing only the `agent` section, and leaving everything else byte-identical.
 `configs/math-verify-codeteam.yaml` and `configs/math-verify-codes.yaml` are
 that: the same task, the same pinned benchmark version, and the same model as
 the Self-Collaboration configuration beside them, given to CodeTeam and to
-CodeS instead. A test asserts that those blocks agree across all three, since
-that agreement is the entire basis for comparing their results.
+CodeS instead. `configs/math-verify-single-shot.yaml` and
+`configs/math-verify-terminus.yaml` are the two baselines on the same footing.
+A test asserts that those blocks agree across all five, since that agreement is
+the entire basis for comparing their results.
 
 Integrating a solution that is not yet here is a larger job than copying a
 configuration, and `docs/adding-a-solution.md` describes it: what the platform
@@ -220,11 +270,12 @@ launched again.
 
 ## The code generation solutions
 
-Three are integrated. Each receives the task's natural-language specification
-and an empty workspace, and each is driven by an adapter in
-`src/evaluation_platform/` that installs the tool in the task container, hands
-it the specification and the configured hyperparameters, and records what it
-spent. No adapter changes how a method works.
+Three are integrated, and two baselines are evaluated beside them. Each
+receives the task's natural-language specification and an empty workspace, and
+each is driven by an adapter in `src/evaluation_platform/` that installs the
+tool in the task container, hands it the specification and the configured
+hyperparameters, and records what it spent. No adapter changes how a method
+works.
 
 ### Self-Collaboration
 
@@ -320,6 +371,44 @@ notices. Two settings follow from that:
   multiplies with `agent.n_concurrent` rather than being capped by it — the
   requests reaching the provider are the product of the two.
 
+### Single-Shot and Terminus 2, the two baselines
+
+Each of the three solutions claims to improve on prompting a model directly,
+and without a direct-prompting arm a comparison between them cannot say whether
+the scaffolding or the model is doing the work. Two arms answer that, and they
+answer different halves of it. `docs/baselines.md` is the argument in full,
+including what to check before reading a low baseline score as a weak baseline.
+
+**Single-Shot** is one request: the specification goes in, a repository comes
+back as text, and a deterministic writer puts the files on disk. It is the only
+entry here that is not a published tool, and it has no revision to pin —
+stating `repository` or `commit` for it is rejected. What identifies a run is
+the prompt and the runner, both recorded as digests.
+
+Its prompt is fixed in `run_single_shot.py` rather than exposed as a
+hyperparameter: a control whose wording is a knob gets tuned, and a tuned
+control is a fourth solution. Everything it says beyond the task's own
+specification is the mechanical contract for naming files, which exists only
+because the benchmark grades files on disk while a model emits text.
+
+A single reward figure cannot tell a baseline that did not know the answer from
+one that ran out of room to write it down, so each run records `truncated`,
+`common_top_level_directory` and `parse_warnings` in its `resolved-setup.json`,
+and keeps the reply verbatim beside the prompt that produced it.
+
+**Terminus 2** is Harbor's own reference agent: one model, one shell, one loop,
+with no roles, no plan and no review. It isolates the thing Single-Shot cannot,
+which is whether a solution's *structure* beats the same model iterating on its
+own. It is the one entry not installed into the task container — the agent runs
+on the host and drives a tmux session inside it — and the one that reaches the
+provider through LiteLLM rather than through the OpenAI client the others
+share, so its tokens are counted by Harbor's accounting. Every run says so in
+its own record.
+
+Terminus ships inside Harbor, so there is no upstream revision to pin here
+either; the Harbor release is the pin. Its `max_turns` is chosen for budget
+parity rather than picked round, and `docs/baselines.md` says how.
+
 ## Results and provenance
 
 Harbor writes each job beneath `jobs/`. Alongside Harbor's own records, each
@@ -335,7 +424,9 @@ run keeps the setup that produced it:
 - `<trial>/agent/resolved-setup.json`: what actually ran in the container —
   the commit of the code generation tool, the resolved model, the
   hyperparameters, and whether the phases that a configuration can switch off
-  were in fact on.
+  were in fact on. The two baselines have no upstream commit, so they record
+  what identifies them instead: Single-Shot the digests of its prompt and its
+  runner, Terminus the Harbor release it ran from.
 - `<trial>/artifacts/workspace/`: the generated workspace.
 - `<trial>/agent/`: the solution's console log, plus what it recorded about its
   own reasoning. Self-Collaboration writes `session-history.json`, the
@@ -343,8 +434,11 @@ run keeps the setup that produced it:
   `codeteam/`, holding every architect's candidate design, the CTO's choice and
   its rationale, the normalized plan, and the result of each QA round; CodeS
   writes `codes/`, holding the prompt and answer of every request it made, one
-  file per phase. These are kept out of the workspace deliberately: they are
-  evidence about the run, not part of the repository being graded.
+  file per phase; Single-Shot writes `single-shot/`, holding the one prompt it
+  sent and the reply verbatim. Terminus keeps its own trajectory and terminal
+  recording, as it does under Harbor anywhere. These are kept out of the
+  workspace deliberately: they are evidence about the run, not part of the
+  repository being graded.
 - `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
   fraction of the task's reference tests that passed, consumed by Harbor.
 
@@ -358,6 +452,13 @@ from this repository with the current `jobs` directory:
 The viewer's jobs path is independent of the experiment runner. Seeing an old
 clone in the viewer is therefore harmless to runs, but that viewer will not
 show jobs created in this repository until it is restarted with the path above.
+
+Harbor's results view lists jobs with the agent that produced them, read from
+the `name` of the job's agent configuration rather than from its `import_path`.
+The launcher writes that name from the solution's own label, so the jobs list
+and the trials beneath it agree on what ran. Jobs created before this was
+written have no name in their `config.json` and will keep showing a blank agent
+column; the trials inside them were always labelled.
 
 The Harbor results view records the provider, model, and dataset label for each
 run, and aggregates uncached input, cached input, and output tokens across

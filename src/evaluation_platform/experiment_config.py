@@ -11,13 +11,14 @@ inspectable after the fact.
 import json
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from evaluation_platform.benchmark import BenchmarkSettings, ImageMirrorRule
+from evaluation_platform.model_routing import ROUTING_ENV, ROUTING_KEYS
 
 
 DEFAULT_CONFIG_PATH = Path("configs/math-verify-self-collaboration.yaml")
@@ -34,13 +35,39 @@ DEFAULT_CONFIG_PATH = Path("configs/math-verify-self-collaboration.yaml")
 # in-container runner.
 
 
+# The configuration keys that pin a revision of an upstream tool. Every
+# solution reads them; the two that have no upstream repository reject them.
+UPSTREAM_REVISION_KEYS = ("repository", "commit")
+
+
 @dataclass(frozen=True)
 class AgentHyperparameters:
     """The hyperparameters one code generation solution accepts."""
 
     solution: str
+    # The name Harbor records for this arm in a job's agent configuration.
+    # Harbor's own results view builds a job's agent column from it and shows
+    # nothing when it is unset, which is why it is stated rather than left to
+    # the agent class alone: the class's `name()` reaches the *trial* record,
+    # while this reaches the *job* record, and a comparison is read at both
+    # levels.
+    #
+    # It must not be one of Harbor's built-in agent names. Where a name is,
+    # Harbor's factory builds that built-in agent and never looks at
+    # `import_path` — so a colliding label would silently run a different agent
+    # than the one the configuration names. `tests/test_experiment_config.py`
+    # holds that line.
+    label: str
     types: Mapping[str, type]
     defaults: Mapping[str, Any]
+    # The values a hyperparameter is restricted to, where the solution
+    # implements a fixed set rather than a range. A name absent from here
+    # takes any value of its type. This belongs to the solution rather than to
+    # the coercion beside it because one name means different things to
+    # different tools: `reasoning_effort` is a free string forwarded to an
+    # OpenAI-compatible provider by three of the solutions here, and one of
+    # eight literals accepted by a fourth.
+    choices: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def resolve(self, values: Mapping[str, Any]) -> dict[str, Any]:
         """Fill in defaults, validate, and reject names the runner would ignore.
@@ -57,7 +84,9 @@ class AgentHyperparameters:
                 f"{', '.join(sorted(self.types))}."
             )
         return dict(self.defaults) | {
-            name: _coerce_hyperparameter(name, value, self.types[name])
+            name: _coerce_hyperparameter(
+                name, value, self.types[name], self.choices.get(name)
+            )
             for name, value in values.items()
         }
 
@@ -83,6 +112,25 @@ class AgentHyperparameters:
                 f"hyperparameters: {', '.join(sorted(self.types))}."
             )
 
+    def reject_upstream_revision(self, names: Iterable[str], identity: str) -> None:
+        """Reject a tool revision this solution has nothing to pin.
+
+        Most entries here are somebody else's repository at a commit, and
+        pinning it is what keeps the tool's version part of the recorded
+        setup. Two are not: one is this platform's own prompt, the other is
+        whatever Terminus ships in the installed Harbor. Harbor ignores agent
+        `kwargs` an agent has no use for, so a `commit` written out of habit
+        would be archived in the experiment's setup as though it had decided
+        something.
+        """
+        named = sorted(name for name in UPSTREAM_REVISION_KEYS if name in names)
+        if named:
+            raise ConfigurationError(
+                f"{self.solution} has no upstream tool to pin, so "
+                f"'agent.{named[0]}' would be recorded and then ignored. What "
+                f"identifies this run is {identity}."
+            )
+
 
 # Self-Collaboration: an Analyst, a Coder, and a Tester that runs between Coder
 # rounds. `test_command`, `reasoning_effort` and `request_extra` have no
@@ -92,6 +140,7 @@ class AgentHyperparameters:
 # either way.
 SELF_COLLABORATION = AgentHyperparameters(
     solution="Self-Collaboration",
+    label="self-collaboration",
     types={
         "max_rounds": int,
         "analyst_steps": int,
@@ -123,8 +172,14 @@ SELF_COLLABORATION = AgentHyperparameters(
 # the two seeds have no defaults: a budget left unset means the run is bounded
 # only by Harbor's own timeout, and a seed left unset means the architect
 # profiles and the fixed developer assignment are not pinned.
+# The retrieval backends CodeTeam's RAG client implements. `faiss_hnsw` is the
+# paper's own path and needs the optional retrieval stack; `lexical` needs
+# nothing beyond the tool's own dependencies.
+RAG_BACKENDS = ("faiss_hnsw", "lexical")
+
 CODE_TEAM = AgentHyperparameters(
     solution="CodeTeam",
+    label="code-team",
     types={
         # Planning.
         "architects": int,
@@ -167,6 +222,7 @@ CODE_TEAM = AgentHyperparameters(
         "temperature": 0.2,
         "top_p": 0.95,
     },
+    choices={"rag_backend": RAG_BACKENDS},
 )
 
 # CodeS: a multi-layer sketch rather than a team. RepoSketcher proposes the
@@ -188,6 +244,7 @@ CODE_TEAM = AgentHyperparameters(
 # chose to propose.
 CODE_S = AgentHyperparameters(
     solution="CodeS",
+    label="codes",
     types={
         # How a request is made, and what happens when one fails.
         "request_attempts": int,
@@ -214,16 +271,130 @@ CODE_S = AgentHyperparameters(
     },
 )
 
+# Single-Shot: the baseline, and the only entry here that is not a published
+# tool. One request carries the task's specification together with the
+# instruction that says how to lay a repository out in a reply, and a
+# deterministic writer puts the files that reply names into the workspace.
+# There is no plan, no role, no test run, and no second look at the result.
+#
+# Every solution beside it claims to improve on prompting a model directly,
+# and a comparison with no direct-prompting arm cannot say whether the
+# scaffolding or the model is doing the work. `docs/baselines.md` is the
+# longer form of that argument.
+#
+# The prompt is deliberately not a hyperparameter. It is fixed in the runner
+# and recorded by digest with every run, because a control whose prompt is a
+# knob has stopped being a control and become a fourth solution.
+#
+# `max_tokens` defaults far above the 8192 the other solutions use. They spend
+# their budget one file or one function at a time; this one has to fit a whole
+# repository into a single reply. A reply that reaches the ceiling is recorded
+# as truncated rather than graded silently, because a baseline that ran out of
+# output tokens and one that did not know the answer are different findings.
+SINGLE_SHOT = AgentHyperparameters(
+    solution="Single-Shot",
+    label="single-shot",
+    types={
+        "max_tokens": int,
+        "temperature": float,
+        "top_p": float,
+        "reasoning_effort": str,
+        "request_extra": dict,
+        # One request means one chance, so a provider hiccup would otherwise
+        # cost the whole task. These attempts re-send the same request; they
+        # are not a second look at the answer, and the run is still one reply.
+        "request_attempts": int,
+        # How long one attempt may wait for a reply. A request for tens of
+        # thousands of tokens takes minutes to answer, and a stalled one that
+        # is never abandoned takes the trial's whole timeout with it and
+        # records nothing about why. Stated here so that what bounds the run is
+        # part of its setup, and so that the attempts above stay the only
+        # retries: the client makes none of its own.
+        "request_timeout_seconds": int,
+    },
+    defaults={
+        "max_tokens": 32768,
+        "temperature": 0.0,
+        "top_p": 0.95,
+        "request_attempts": 3,
+        "request_timeout_seconds": 600,
+    },
+)
+
+# Terminus 2: Harbor's own reference agent, and the second baseline. A model
+# in a loop with a shell — one agent, no roles, no plan, no review — which is
+# what makes it the more searching control of the two. The question a
+# multi-agent solution has to answer is not whether it beats a single request,
+# but whether its structure beats the same model iterating on its own.
+#
+# It is also the one entry that is not installed into the task container. The
+# agent runs on the host, drives a tmux session inside the container, and
+# reaches the provider through LiteLLM rather than through the OpenAI client
+# the other solutions share, so what it spends is counted by Harbor rather
+# than by `model_usage.py`. There is no upstream revision to pin either: what
+# runs is the Terminus of whichever Harbor release this project is installed
+# with, which the adapter records per run.
+#
+# `max_turns` and `temperature` have no default, for the reason CodeTeam's and
+# CodeS's budgets have none. Terminus bounds itself at a million turns, which
+# is no bound at all, and sends no temperature unless given one, which leaves
+# the draw to the provider. Both are choices a configuration should have to
+# make out loud.
+TERMINUS_REASONING_EFFORTS = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "default",
+)
+TERMINUS_PARSERS = ("json", "xml")
+
+TERMINUS = AgentHyperparameters(
+    solution="Terminus 2",
+    # Not plain `terminus-2`: that is one of Harbor's own agent names, and a
+    # job whose agent is named it gets Harbor's built-in Terminus rather than
+    # the adapter that points it at this experiment's endpoint. The suffix is
+    # what keeps the configuration's `import_path` in charge. What ran is still
+    # Harbor's Terminus 2, and each run's resolved-setup.json says which.
+    label="terminus-2-baseline",
+    types={
+        "max_turns": int,
+        "temperature": float,
+        "reasoning_effort": str,
+        # Merged into the request body verbatim, exactly as it is for the three
+        # solutions that reach the provider through the OpenAI client. Terminus
+        # goes through LiteLLM, which carries this through to the same place,
+        # so a provider-level setting such as OpenRouter's `reasoning` object is
+        # stated once and means the same thing in every arm of the comparison.
+        "request_extra": dict,
+        # How the agent is asked to phrase a tool call. Terminus ships both and
+        # defaults to JSON.
+        "parser_name": str,
+        # Whether the agent compresses its own history when the context fills.
+        # On by default, and worth leaving on: a task that writes a repository
+        # is long, and the alternative to summarizing is failing at the ceiling.
+        "enable_summarize": bool,
+    },
+    defaults={
+        "parser_name": "json",
+        "enable_summarize": True,
+    },
+    choices={
+        "reasoning_effort": TERMINUS_REASONING_EFFORTS,
+        "parser_name": TERMINUS_PARSERS,
+    },
+)
+
 AGENT_HYPERPARAMETERS: dict[str, AgentHyperparameters] = {
     "evaluation_platform.self_collaboration_agent": SELF_COLLABORATION,
     "evaluation_platform.code_team_agent": CODE_TEAM,
     "evaluation_platform.codes_agent": CODE_S,
+    "evaluation_platform.single_shot_agent": SINGLE_SHOT,
+    "evaluation_platform.terminus_agent": TERMINUS,
 }
-
-# The retrieval backends CodeTeam's RAG client implements. `faiss_hnsw` is the
-# paper's own path and needs the optional retrieval stack; `lexical` needs
-# nothing beyond the tool's own dependencies.
-RAG_BACKENDS = ("faiss_hnsw", "lexical")
 
 # Integer hyperparameters that are not counts. Every other one bounds a number
 # of rounds, steps, agents, or tokens, where zero means the phase does not
@@ -290,7 +461,9 @@ _BENCHMARK_KEYS = {
     "image_mirror",
 }
 _MIRROR_KEYS = {"expects", "pull_from"}
-_MODEL_KEYS = {"provider", "name", "base_url", "api_key_env"}
+_MODEL_KEYS = {"provider", "name", "base_url", "api_key_env", "routing"}
+# Routing keys whose value is a list of endpoint or provider names.
+_ROUTING_NAME_LISTS = ("order", "only", "ignore", "quantizations")
 _AGENT_KEYS = {
     "import_path",
     "n_concurrent",
@@ -319,6 +492,13 @@ class ExperimentConfig:
     model_name: str
     base_url: str
     api_key_env: str
+    # Which of the provider's servers may answer. Beside the model rather than
+    # in any solution's hyperparameters, because it is not a property of a
+    # method: an aggregator serves one model from many providers at different
+    # quantizations, and an arm running fp4 where another runs fp8 is not the
+    # same experiment. `None` leaves the choice to the aggregator, which makes
+    # it by price and does not record what it chose.
+    model_routing: dict[str, Any] | None
     agent_import_path: str
     agent_n_concurrent: int | None
     agent_repository: str | None
@@ -344,6 +524,10 @@ class ExperimentConfig:
     def to_harbor_config(self, job_name: str) -> dict[str, Any]:
         agent: dict[str, Any] = {
             "import_path": self.agent_import_path,
+            # Harbor's results view reads a job's agent column from this and
+            # leaves it blank when it is unset, even though every trial beneath
+            # the job records the agent it ran.
+            "name": agent_hyperparameters(self.agent_import_path).label,
             "model_name": self.model_label,
             "kwargs": dict(self.hyperparameters),
             "env": {
@@ -351,6 +535,9 @@ class ExperimentConfig:
                 "API_KEY_ENV": self.api_key_env,
                 "BASE_URL": self.base_url,
                 "MODEL": self.model_name,
+                # One directive, delivered the same way to every arm, whether
+                # the solution runs in the task container or on the host.
+                ROUTING_ENV: json.dumps(self.model_routing or {}),
             },
         }
         if self.agent_n_concurrent is not None:
@@ -400,6 +587,11 @@ class ExperimentConfig:
                 "name": self.model_name,
                 "base_url": self.base_url,
                 "api_key_env": self.api_key_env,
+                **(
+                    {"routing": dict(self.model_routing)}
+                    if self.model_routing
+                    else {}
+                ),
             },
             "agent": agent,
         }
@@ -437,7 +629,12 @@ def agent_hyperparameters(import_path: str) -> AgentHyperparameters:
         ) from None
 
 
-def _coerce_hyperparameter(name: str, value: Any, expected: type) -> Any:
+def _coerce_hyperparameter(
+        name: str,
+        value: Any,
+        expected: type,
+        choices: tuple[str, ...] | None = None,
+) -> Any:
     if expected is bool:
         if not isinstance(value, bool):
             raise ConfigurationError(
@@ -457,10 +654,10 @@ def _coerce_hyperparameter(name: str, value: Any, expected: type) -> Any:
             "Hyperparameter 'test_command' must be a command; remove the key to "
             "run the Coder without the Tester."
         )
-    if name == "rag_backend" and value not in RAG_BACKENDS:
+    if choices is not None and value not in choices:
         raise ConfigurationError(
-            f"Hyperparameter 'rag_backend' must be one of "
-            f"{', '.join(RAG_BACKENDS)}, got {value!r}."
+            f"Hyperparameter {name!r} must be one of "
+            f"{', '.join(choices)}, got {value!r}."
         )
     if expected is dict:
         try:
@@ -525,6 +722,7 @@ def _build_config(
         model_name=_require_str(model, "name", "'model'", source),
         base_url=base_url,
         api_key_env=api_key_env,
+        model_routing=_build_routing(model, source),
         agent_import_path=import_path,
         agent_n_concurrent=agent.get("n_concurrent"),
         agent_repository=agent.get("repository"),
@@ -666,6 +864,58 @@ def _require_str_list(
             f"'benchmark.{key}' in {source} must be a list of strings."
         )
     return list(values)
+
+
+def _build_routing(
+        model: Mapping[str, Any],
+        source: str,
+) -> dict[str, Any] | None:
+    """Read and check the provider routing a configuration pins.
+
+    A misspelled key is the failure worth catching here: the API accepts an
+    unknown routing field and ignores it, so the run is unpinned and every
+    record still says it was pinned.
+    """
+    routing = model.get("routing")
+    if routing is None:
+        return None
+    routing = _require_mapping(routing, "'model.routing'", source)
+    if not routing:
+        raise ConfigurationError(
+            f"'model.routing' in {source} is empty. Remove the key to leave "
+            "the choice of server to the provider, or name the endpoints the "
+            "run may use."
+        )
+
+    unknown = set(routing) - ROUTING_KEYS
+    if unknown:
+        raise ConfigurationError(
+            f"Unknown key(s) in 'model.routing' of {source}: "
+            f"{', '.join(sorted(unknown))}. The provider accepts an unknown "
+            "routing field and ignores it, which would leave the run routed by "
+            f"price while its record said otherwise. Known keys: "
+            f"{', '.join(sorted(ROUTING_KEYS))}."
+        )
+
+    for key in _ROUTING_NAME_LISTS:
+        if key in routing and (
+                not isinstance(routing[key], list)
+                or not routing[key]
+                or not all(isinstance(name, str) and name for name in routing[key])
+        ):
+            raise ConfigurationError(
+                f"'model.routing.{key}' in {source} must be a non-empty list "
+                "of endpoint names."
+            )
+
+    if "allow_fallbacks" in routing and not isinstance(
+            routing["allow_fallbacks"], bool
+    ):
+        raise ConfigurationError(
+            f"'model.routing.allow_fallbacks' in {source} must be true or false."
+        )
+
+    return dict(routing)
 
 
 def _validate_endpoint(provider: str, base_url: str, source: str) -> None:

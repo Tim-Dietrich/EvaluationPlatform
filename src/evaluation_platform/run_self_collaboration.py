@@ -13,6 +13,11 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
+from model_routing import (  # noqa: E402
+    ServedProviders,
+    install_client_routing,
+    routing_from_env,
+)
 
 SELF_COLLABORATION_ROOT = Path("/installed-agent/self-collaboration")
 WORKSPACE = Path("/workspace")
@@ -46,10 +51,22 @@ def main() -> None:
     config_module = importlib.import_module("core.config")
     repo_tools_module = importlib.import_module("core.repo_tools")
 
+    # Pin which of the provider's servers may answer, before any request is
+    # made. The wrapper sits on the OpenAI client rather than on this runner's
+    # own call sites, so it reaches the requests the tool builds for itself as
+    # well; what changes is the server, not the messages, the sampling, or the
+    # model. The same seam reads back which server actually answered.
+    routing = routing_from_env()
+    observed = ServedProviders()
+    install_client_routing(routing, observed)
+
     model_config = config_module.ModelConfig(
         **_model_settings(hyperparameters)
     )
-    _record_resolved_setup(hyperparameters, model_config)
+    # Written before the session starts, so a run that dies in its first
+    # round still says what it was, and again after it, once the servers
+    # that answered are known.
+    _record_resolved_setup(hyperparameters, model_config, routing, observed)
 
     usage_totals = UsageTotals()
     agent_module.call_llm_with_tools = _usage_recording_call(
@@ -88,6 +105,7 @@ def main() -> None:
             json.dumps(usage_totals.to_dict(), indent=2),
             encoding="utf-8",
         )
+        _record_resolved_setup(hyperparameters, model_config, routing, observed)
     HISTORY_PATH.write_text(
         json.dumps(
             {
@@ -167,6 +185,8 @@ def _read_hyperparameters() -> dict[str, Any]:
 def _record_resolved_setup(
         hyperparameters: dict[str, Any],
         model_config: Any,
+        routing: dict[str, Any] | None,
+        observed: ServedProviders,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -180,6 +200,10 @@ def _record_resolved_setup(
                 "self_collaboration_commit": _installed_commit(),
                 "model": model_config.model,
                 "base_url": model_config.base_url,
+                # What the run asked of the aggregator, and which server
+                # answered. A model name does not name a server.
+                "routing": routing,
+                "providers_served": observed.names(),
                 "hyperparameters": hyperparameters,
                 "tester_enabled": bool(hyperparameters.get("test_command")),
                 "reasoning_requested": bool(

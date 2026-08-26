@@ -4,12 +4,20 @@ from typing import Any
 import pytest
 import yaml
 
+from harbor.models.agent.name import AgentName
+
 from main import archive_setup, build_harbor_command
+from evaluation_platform.code_team_agent import CodeTeamAgent
+from evaluation_platform.codes_agent import CodeSAgent
 from evaluation_platform.experiment_config import (
+    AGENT_HYPERPARAMETERS,
     DEFAULT_CONFIG_PATH,
     ConfigurationError,
     load_experiment_config,
 )
+from evaluation_platform.self_collaboration_agent import SelfCollaborationAgent
+from evaluation_platform.single_shot_agent import SingleShotAgent
+from evaluation_platform.terminus_agent import TerminusAgent
 
 
 ROOT = Path(__file__).parents[1]
@@ -124,6 +132,9 @@ def test_agent_environment_forwards_only_the_model_backend(tmp_path):
         "API_KEY_ENV": "API_KEY",
         "BASE_URL": "https://openrouter.ai/api/v1",
         "MODEL": "test/free-model",
+        # Empty when a configuration pins no routing, which leaves the choice
+        # of server to the aggregator.
+        "MODEL_ROUTING": "{}",
     }
     assert "test-credential" not in yaml.safe_dump(environment)
 
@@ -381,7 +392,13 @@ def test_the_benchmark_configuration_runs_its_tasks_in_parallel():
 
 
 @pytest.mark.parametrize(
-    "solution", ["math-verify-codeteam.yaml", "math-verify-codes.yaml"]
+    "solution",
+    [
+        "math-verify-codeteam.yaml",
+        "math-verify-codes.yaml",
+        "math-verify-single-shot.yaml",
+        "math-verify-terminus.yaml",
+    ],
 )
 def test_the_solutions_are_compared_on_the_same_benchmark_and_model(solution):
     """What makes the math-verify configurations a comparison.
@@ -404,6 +421,128 @@ def test_the_solutions_are_compared_on_the_same_benchmark_and_model(solution):
 
     assert other["benchmark"] == self_collaboration["benchmark"]
     assert other["model"] == self_collaboration["model"]
+
+
+def test_the_job_records_which_agent_ran(tmp_path):
+    """Harbor's results view reads a job's agent column from this field.
+
+    Every trial beneath a job records the agent that ran it, from the agent
+    class's own `name()`. The job above them records nothing unless its agent
+    configuration is given a name, which is why the label is stated in the
+    registry and written here.
+    """
+    config = load_experiment_config(write_config(tmp_path), ENVIRONMENT)
+
+    agent = config.to_harbor_config("2026-01-01__00-00-00")["agents"][0]
+
+    assert agent["name"] == "self-collaboration"
+    assert agent["import_path"].startswith(
+        "evaluation_platform.self_collaboration_agent"
+    )
+
+
+def test_no_arm_is_named_what_harbor_calls_one_of_its_own():
+    """The collision that would silently run a different agent.
+
+    Harbor's factory prefers a configured agent name over an `import_path`
+    whenever that name is one of its built-ins, and never looks at the
+    `import_path` at all in that case. An arm labelled `terminus-2` or `codex`
+    would therefore run Harbor's agent of that name rather than the one the
+    configuration points at, with no error anywhere to say so.
+    """
+    built_in = set(AgentName.values())
+
+    for schema in AGENT_HYPERPARAMETERS.values():
+        assert schema.label not in built_in, (
+            f"{schema.solution} is labelled {schema.label!r}, which is one of "
+            "Harbor's own agent names"
+        )
+
+
+def test_each_arms_label_is_the_name_its_agent_reports():
+    """The job's agent column and its trials' should say the same thing.
+
+    The label reaches the job record and the agent class's `name()` reaches
+    every trial record beneath it. They are set in two places, so they are
+    checked against each other here.
+    """
+    agents = {
+        "evaluation_platform.self_collaboration_agent": SelfCollaborationAgent,
+        "evaluation_platform.code_team_agent": CodeTeamAgent,
+        "evaluation_platform.codes_agent": CodeSAgent,
+        "evaluation_platform.single_shot_agent": SingleShotAgent,
+        "evaluation_platform.terminus_agent": TerminusAgent,
+    }
+
+    assert set(agents) == set(AGENT_HYPERPARAMETERS)
+    for module, agent_class in agents.items():
+        assert agent_class.name() == AGENT_HYPERPARAMETERS[module].label
+
+
+def test_the_shipped_single_shot_configuration_resolves_to_a_complete_setup():
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-single-shot.yaml", ENVIRONMENT
+    )
+
+    hyperparameters = config.hyperparameters
+    assert config.agent_import_path.startswith("evaluation_platform.single_shot_agent")
+    # The baseline is not somebody else's tool at a revision, and saying it
+    # were would put a version in the record that decided nothing.
+    assert config.agent_repository is None
+    assert config.agent_commit is None
+    # A whole repository has to fit in one reply. Below this the arm measures
+    # the token ceiling rather than the model, which is the one way a baseline
+    # can be unfair without looking it.
+    assert hyperparameters["max_tokens"] >= 16384
+    # Reasoning is pinned rather than inherited, as in the configurations
+    # beside this one.
+    assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
+
+
+def test_the_shipped_terminus_configuration_resolves_to_a_complete_setup():
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-terminus.yaml", ENVIRONMENT
+    )
+
+    hyperparameters = config.hyperparameters
+    assert config.agent_import_path.startswith("evaluation_platform.terminus_agent")
+    # Terminus ships inside Harbor; the Harbor release is the pin, and it is
+    # recorded per run rather than written in the configuration.
+    assert config.agent_repository is None
+    assert config.agent_commit is None
+    # Terminus bounds itself at a million turns, which is no bound at all, so
+    # a configuration that states none leaves the trial's timeout as the only
+    # limit and the arm's cost unstated.
+    assert hyperparameters["max_turns"] >= 1
+    assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
+
+
+@pytest.mark.parametrize(
+    "solution",
+    [
+        "math-verify-codeteam.yaml",
+        "math-verify-codes.yaml",
+        "math-verify-terminus.yaml",
+    ],
+)
+def test_every_arm_that_can_pin_its_reasoning_pins_it_the_same_way(solution):
+    """An arm that reasons where another does not is not a comparison.
+
+    Self-Collaboration is the documented exception and is absent here: the
+    revision under evaluation sends no reasoning field at all on its
+    tool-calling path, so the setting cannot be stated without patching the
+    tool. Everywhere it can be stated, it is stated identically, whether it
+    reaches the provider through the OpenAI client or through LiteLLM.
+    """
+    baseline = load_experiment_config(
+        ROOT / "configs" / "math-verify-single-shot.yaml", ENVIRONMENT
+    ).hyperparameters
+    other = load_experiment_config(
+        ROOT / "configs" / solution, ENVIRONMENT
+    ).hyperparameters
+
+    assert other.get("request_extra") == baseline.get("request_extra")
+    assert other.get("reasoning_effort") == baseline.get("reasoning_effort")
 
 
 def test_the_shipped_codeteam_configuration_resolves_to_a_complete_setup():

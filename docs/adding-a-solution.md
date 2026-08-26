@@ -1,7 +1,8 @@
 # Adding a code generation solution
 
-Three solutions are integrated: Self-Collaboration, CodeTeam and CodeS. This
-describes how to add the next one, and — more usefully — which parts of the job
+Three solutions are integrated: Self-Collaboration, CodeTeam and CodeS. Two
+baselines are evaluated beside them, and `baselines.md` describes what they are
+for. This describes how to add the next solution, and — more usefully — which parts of the job
 are not obvious until you have done it three times.
 
 The platform's contract with a solution is narrow. It hands the solution a

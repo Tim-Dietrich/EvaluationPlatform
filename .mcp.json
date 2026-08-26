@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "pycharm": {
-      "type": "sse",
-      "url": "http://localhost:64342/sse",
-      "headers": {
-        "IJ_MCP_SERVER_PROJECT_PATH": "C:\\Code\\EvaluationPlatform"
-      }
+      "url": "http://127.0.0.1:64462/stream",
+      "type": "http"
     }
   }
 }

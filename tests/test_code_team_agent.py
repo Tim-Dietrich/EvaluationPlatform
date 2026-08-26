@@ -78,11 +78,13 @@ def test_install_pins_the_revision_and_uploads_the_runner(tmp_path):
     for package in RUNTIME_PACKAGES:
         assert package in commands
     targets = [target for _, target in environment.uploads]
-    # The runner imports the shared usage accounting by its flat name, so it
-    # has to arrive beside it.
+    # The runner imports the shared usage accounting and the shared provider
+    # routing by their flat names, so both have to
+    # arrive beside it.
     assert targets == [
         "/installed-agent/run_code_team.py",
         "/installed-agent/model_usage.py",
+        "/installed-agent/model_routing.py",
     ]
 
 

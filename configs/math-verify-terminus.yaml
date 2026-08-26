@@ -1,0 +1,122 @@
+# Experiment setup: Terminus 2, the agentic baseline, on a single
+# NL2RepoBench task.
+#
+# The `benchmark` and `model` blocks are byte-identical to the four
+# configurations beside this one, so a difference between the runs is a
+# difference between the methods rather than between the setups. The `run`
+# block is the exception and is not part of that claim.
+#
+# What this arm is for: `math-verify-single-shot.yaml` asks what one request
+# buys, which is the comparison the papers themselves make. This asks the
+# question a reader will ask next. Terminus 2 is Harbor's own reference agent —
+# one model, one shell, one loop, no roles, no plan and no review — so it
+# isolates the *structure* of a multi-agent solution from the plain fact of
+# being able to iterate. A solution that beats a single request but not a
+# single agent has not shown that its roles are what did the work.
+#
+# There is no `repository` or `commit` here, and stating one is rejected.
+# Terminus ships inside Harbor, so what ran is the Harbor release this project
+# is installed with, recorded in the run's `resolved-setup.json`.
+#
+# Two things about this arm differ from the others by necessity, and both are
+# recorded rather than assumed. It is not installed into the task container:
+# the agent runs on the host and drives a tmux session inside the container.
+# And it reaches the provider through LiteLLM rather than through the OpenAI
+# client the other four share, so its tokens are counted by Harbor's own
+# accounting. The figures mean the same thing; the counter is not the same one.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: math-verify-terminus
+description: >-
+  Terminus 2 — a single agent with a shell, no roles and no plan — generates
+  the math-verify library from NL2RepoBench's natural-language specification.
+  The hidden reference tests stay in the tester sidecar and are never visible
+  to the agent; the reward is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 1
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  task_names:
+    - nl2repobench/math-verify
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  # Which of the aggregator's servers may answer. A model name does not name a
+  # server: OpenRouter offers this model from more than twenty providers that
+  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
+  # very different speeds, and its default route is chosen by price. Unpinned,
+  # two arms of this comparison can run the same model at different numerical
+  # precision, and so can two requests inside one arm, with nothing recording
+  # which. That is a confound in the one variable every configuration here
+  # holds constant, so it is pinned beside the model rather than left to the
+  # aggregator, and it belongs in `model` rather than in any solution's
+  # hyperparameters because it is not a property of a method. The test that
+  # requires these blocks to agree across configurations is therefore the test
+  # that keeps every arm on one server.
+  #
+  # Measured on 2026-08-26, one 500-token generation each: the default route
+  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
+  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
+  # tokens, the best speed for the money among the endpoints this account may
+  # use. siliconflow/fp8 is the named second choice because it is the only
+  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
+  # precision this pin exists to fix; `allow_fallbacks: false` stops the
+  # aggregator substituting anything outside the pair.
+  #
+  # These tags name endpoints *of the model above*. Changing the model means
+  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
+  # on offer, with each endpoint's quantization and price.
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+
+agent:
+  import_path: evaluation_platform.terminus_agent:TerminusAgent
+  n_concurrent: 1
+  hyperparameters:
+    # Terminus bounds itself at a million turns, which is no bound at all, so
+    # the number here is the experiment's. It is chosen for budget parity
+    # rather than picked round: Self-Collaboration's ceiling on this benchmark
+    # is three Coder rounds of ten Analyst and fifteen Coder steps, and CodeS
+    # spends a comparable number of requests on a repository of this size. A
+    # turn is one model call, so 75 gives this arm the same order of model
+    # calls as the solutions it is being compared with. Reading it far higher
+    # would make the baseline stronger and the comparison less honest; reading
+    # it far lower would do the reverse. The trial's own agent timeout is the
+    # other limit, and the one that bites first on a slow provider:
+    # NL2RepoBench allows an hour per task, so seventy-five turns have to fit
+    # inside it. `run.agent_timeout_multiplier` is the knob if they do not.
+    max_turns: 75
+    temperature: 0.0
+    # Terminus ships a JSON and an XML tool-call format and defaults to JSON.
+    parser_name: json
+    # A task that writes a whole repository is long. With this off, the
+    # alternative to compressing the history is failing at the context ceiling.
+    enable_summarize: true
+    # Reasoning is pinned rather than inherited, to the same value as the
+    # configurations beside this one — an arm that reasons where another does
+    # not is not a comparison of methods. `request_extra` is merged into the
+    # body of every request, which is where the other solutions' setting of the
+    # same name ends up, so this states one thing once and means it everywhere.
+    # What actually happened is recorded in the run's model usage.
+    request_extra:
+      reasoning:
+        enabled: false

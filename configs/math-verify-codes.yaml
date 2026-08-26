@@ -48,6 +48,36 @@ model:
   name: ${MODEL:-moonshotai/kimi-k2.5}
   base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
   api_key_env: API_KEY
+  # Which of the aggregator's servers may answer. A model name does not name a
+  # server: OpenRouter offers this model from more than twenty providers that
+  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
+  # very different speeds, and its default route is chosen by price. Unpinned,
+  # two arms of this comparison can run the same model at different numerical
+  # precision, and so can two requests inside one arm, with nothing recording
+  # which. That is a confound in the one variable every configuration here
+  # holds constant, so it is pinned beside the model rather than left to the
+  # aggregator, and it belongs in `model` rather than in any solution's
+  # hyperparameters because it is not a property of a method. The test that
+  # requires these blocks to agree across configurations is therefore the test
+  # that keeps every arm on one server.
+  #
+  # Measured on 2026-08-26, one 500-token generation each: the default route
+  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
+  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
+  # tokens, the best speed for the money among the endpoints this account may
+  # use. siliconflow/fp8 is the named second choice because it is the only
+  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
+  # precision this pin exists to fix; `allow_fallbacks: false` stops the
+  # aggregator substituting anything outside the pair.
+  #
+  # These tags name endpoints *of the model above*. Changing the model means
+  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
+  # on offer, with each endpoint's quantization and price.
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
 
 agent:
   import_path: evaluation_platform.codes_agent:CodeSAgent

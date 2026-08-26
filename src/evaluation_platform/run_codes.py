@@ -48,6 +48,11 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
+from model_routing import (  # noqa: E402
+    ServedProviders,
+    install_client_routing,
+    routing_from_env,
+)
 
 CODES_ROOT = Path("/installed-agent/codes")
 EVALUATION_SCRIPTS = CODES_ROOT / "validation" / "evaluation_scripts"
@@ -83,6 +88,15 @@ def main() -> None:
     _require_deprecated_ast_aliases()
     tool = _import_tool()
 
+    # Pin which of the provider's servers may answer, before any request is
+    # made. The wrapper sits on the OpenAI client rather than on this runner's
+    # own call sites, so it reaches the requests the tool builds for itself as
+    # well; what changes is the server, not the messages, the sampling, or the
+    # model. The same seam reads back which server actually answered.
+    routing = routing_from_env()
+    observed = ServedProviders()
+    install_client_routing(routing, observed)
+
     totals = UsageTotals()
     budget = _Budget(hyperparameters, totals)
     request = _requester(
@@ -113,7 +127,11 @@ def main() -> None:
         _write_usage(totals)
         _write_records(records)
         outcome = _guarded(lambda: _write_repository(tool, records))
-        _guarded(lambda: _record_resolved_setup(hyperparameters, records, outcome))
+        _guarded(
+            lambda: _record_resolved_setup(
+                hyperparameters, records, outcome, routing, observed
+            )
+        )
     print(f"Done. Repo at: {WORKSPACE}")
 
 
@@ -643,6 +661,8 @@ def _record_resolved_setup(
         hyperparameters: dict[str, Any],
         records: dict[str, list[dict[str, Any]]],
         outcome: dict[str, Any] | None,
+        routing: dict[str, Any] | None,
+        observed: ServedProviders,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -660,6 +680,10 @@ def _record_resolved_setup(
                 "codes_commit": _installed_commit(),
                 "model": os.environ.get("MODEL"),
                 "base_url": os.environ.get("BASE_URL"),
+                # What the run asked of the aggregator, and which
+                # server answered. A model name does not name a server.
+                "routing": routing,
+                "providers_served": observed.names(),
                 "hyperparameters": hyperparameters,
                 "files_sketched": len(records[FILE_SKETCH]),
                 "functions_requested": len(records[FUNCTION_BODY]),
