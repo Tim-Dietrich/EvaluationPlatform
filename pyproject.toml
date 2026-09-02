@@ -12,6 +12,15 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=9.0"]
+# Notebook stack for `notebooks/`: benchmark subset selection and its figures.
+# Kept out of the runtime dependency so a run of the platform does not drag in
+# a plotting stack it never uses.
+analysis = [
+    "jupyterlab>=4.2",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "scipy>=1.14",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

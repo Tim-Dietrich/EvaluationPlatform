@@ -177,6 +177,25 @@ about scope. `configs/nl2repobench-self-collaboration.yaml` runs all 104 tasks;
 `configs/math-verify-self-collaboration.yaml` is the same setup narrowed to one
 task for iterating cheaply.
 
+### A representative subset
+
+Between one task and all of them sits the case where the whole benchmark is what
+you want to measure but not what you can afford to run: 104 tasks times five
+repeats times five solutions is 2 600 trials. `configs/nl2repobench-subset-single-shot.yaml`
+is the Single-Shot configuration narrowed to 30 tasks chosen to stand in for all
+104 — a stratified sample of the benchmark's own difficulty levels, holding its
+26 / 46 / 32 mix at 8 / 13 / 9.
+
+Which 30, and why those, is the entire question, so the selection is not
+hand-written: `notebooks/nl2repobench-subset-selection.ipynb` derives it from
+published task metadata, shows the distributions it preserves, and writes both
+the config and `benchmarks/nl2repobench/subset.csv`. Everything in the generated
+config except its name, description and `task_names` is byte-identical to
+`configs/nl2repobench-single-shot.yaml`, which is what lets a subset run be
+compared with the full run it stands in for. Re-run the notebook rather than
+editing the task list by hand; `pip install -e ".[analysis]"` installs what it
+needs.
+
 Comparing a further code generation solution means copying a configuration,
 changing only the `agent` section, and leaving everything else byte-identical.
 `configs/math-verify-codeteam.yaml` and `configs/math-verify-codes.yaml` are
