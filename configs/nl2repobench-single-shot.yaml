@@ -7,7 +7,7 @@ description: >-
 
 run:
   jobs_dir: jobs
-  n_attempts: 2
+  n_attempts: 5
   n_concurrent_trials: 10
   artifacts:
     - /workspace
@@ -15,8 +15,9 @@ run:
 benchmark:
   dataset: nl2repobench/nl2repobench
   ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
-  task_names:
-    - nl2repobench/math-verify
+  #  Since we're doing a full run, specific task from template is commented out
+  #  task_names:
+  #    - nl2repobench/math-verify
   image_mirror:
     - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
       pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
@@ -69,7 +70,7 @@ agent:
     # so the two are distinguishable after the fact rather than conflated.
     # Check that field before reading a poor result as a poor baseline.
     max_tokens: 32768
-    temperature: 0.0
+    temperature: 0.2
     top_p: 0.95
     # One request means one chance, and a throttled provider would otherwise
     # cost the whole task. These attempts re-send the same prompt; they are not
