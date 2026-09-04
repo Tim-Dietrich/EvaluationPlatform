@@ -20,6 +20,13 @@ It records the setup, as every other arm does. There is no upstream revision
 to pin here: Terminus is part of Harbor, so the version that ran is the
 version of the Harbor this platform is installed with.
 
+It applies the run's sampling parameters, which reach Terminus by two routes
+rather than one. Terminus takes a `temperature` of its own and has no parameter
+for the other two, so `top_p` and `max_tokens` are passed as `llm_kwargs`, which
+Harbor's LiteLLM wrapper spreads into the body of every request it sends. The
+three values are the same three every other arm sends, from the same file, and
+each run's `resolved-setup.json` says which route each one took.
+
 One consequence is worth stating where results are read rather than
 discovered later. Terminus runs on the host and calls the provider through
 LiteLLM, so what it spent is counted by Harbor's own accounting rather than by
@@ -32,13 +39,17 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, Callable
 
 from harbor.agents.terminus_2 import Terminus2
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import TERMINUS
+from evaluation_platform.experiment_config import (
+    TERMINUS,
+    resolve_generation_kwargs,
+)
+from evaluation_platform.failure_categories import FailureTally
 from evaluation_platform.model_routing import (
     ROUTING_ENV,
     routing_from_env,
@@ -85,14 +96,29 @@ class TerminusAgent(Terminus2):
             name: kwargs.pop(name) for name in list(kwargs) if name in TERMINUS.types
         }
         TERMINUS.reject_upstream_revision(kwargs, IDENTITY)
+        # The sampling parameters, set for every arm at once, arrive beside the
+        # solution's own hyperparameters as they do for the four solutions that
+        # run in the task container. They are kept apart from `hyperparameters`
+        # here because they do not all reach Terminus by the same route.
+        self.generation = resolve_generation_kwargs(kwargs)
         TERMINUS.reject_foreign(kwargs)
         self.hyperparameters = TERMINUS.resolve(hyperparameters)
         self.connection = model_connection(kwargs.get("extra_env"), os.environ)
+        self.failures = FailureTally()
 
         settings: dict[str, Any] = {
             name: value
             for name, value in self.hyperparameters.items()
             if name != "request_extra"
+        }
+        # What each request will carry, and how. `temperature` is a parameter
+        # Terminus declares; the other two are not, and travel in `llm_kwargs`,
+        # which Harbor's LiteLLM wrapper spreads into every request body. The
+        # split is a property of Harbor's interface rather than of this
+        # experiment — the three values are the ones every other arm sends.
+        settings["temperature"] = self.generation["temperature"]
+        llm_kwargs: dict[str, Any] = {
+            name: self.generation[name] for name in ("top_p", "max_tokens")
         }
         # Harbor's LiteLLM wrapper merges an `extra_body` given here into the
         # body of every request, which is the same place the other solutions'
@@ -110,9 +136,19 @@ class TerminusAgent(Terminus2):
             # what lets the credential stay under the name the configuration
             # chose instead of having to be re-exported as OPENROUTER_API_KEY
             # or its equivalent for whichever provider is in use.
-            settings["llm_kwargs"] = {"api_key": self.connection.api_key}
+            llm_kwargs["api_key"] = self.connection.api_key
+        settings["llm_kwargs"] = llm_kwargs
 
         super().__init__(*args, **settings, **kwargs)
+
+        # Count the two token-limit failures Harbor raises as exceptions, on the
+        # way past. Terminus handles both itself — it summarizes its history at
+        # the context ceiling and salvages what it can from a truncated reply —
+        # and continues to, because the wrapper re-raises everything it sees.
+        # Without this the two are visible only as debug lines in a log that is
+        # not aggregated, and a run that spent half its turns recovering from
+        # them looks like a run that did not.
+        self._llm.call = _counting_calls(self._llm.call, self.failures)
 
         # The model call happens on the host, so the container has no use for
         # the credential. This agent is a shell in that container, and a secret
@@ -129,8 +165,15 @@ class TerminusAgent(Terminus2):
             environment: BaseEnvironment,
             context: AgentContext,
     ) -> None:
+        # Written before the loop starts, so a run that dies in its first turn
+        # still says what it was, and again after it, once the sampling that was
+        # used and the limits that were hit are both known. The other arms
+        # record theirs the same way.
         self._record_resolved_setup()
-        await super().run(instruction, environment, context)
+        try:
+            await super().run(instruction, environment, context)
+        finally:
+            self._record_resolved_setup()
 
     def _record_resolved_setup(self) -> None:
         """Record what actually ran, next to the run's other logs.
@@ -157,6 +200,23 @@ class TerminusAgent(Terminus2):
                     # the intent is on file either way.
                     "routing": self.connection.routing,
                     "hyperparameters": self.hyperparameters,
+                    # The sampling this run actually used, and the route each
+                    # value took to the provider, so the setup can be checked
+                    # against the result rather than assumed from a config file
+                    # that may have moved on since.
+                    "generation": {
+                        **self.generation,
+                        "source": "configs/generation.yaml",
+                        "applied_via": {
+                            "temperature": "terminus temperature parameter",
+                            "top_p": "llm_kwargs, spread into every request",
+                            "max_tokens": "llm_kwargs, spread into every request",
+                        },
+                    },
+                    # Why a run stopped where it did, in categories that stay
+                    # apart from each other, from a timeout, and from a test
+                    # that failed. Empty until the run has made a request.
+                    "failures": self.failures.to_dict(),
                     "reasoning_requested": bool(
                         self.hyperparameters.get("reasoning_effort")
                     ),
@@ -169,6 +229,27 @@ class TerminusAgent(Terminus2):
             ),
             encoding="utf-8",
         )
+
+
+def _counting_calls(
+        call: Callable[..., Any],
+        failures: FailureTally,
+) -> Callable[..., Any]:
+    """`LiteLLM.call`, with the token-limit failures counted on the way past.
+
+    Nothing is swallowed and nothing is retried here: the exception is counted
+    and re-raised, so Terminus's own recovery — summarize at the context
+    ceiling, salvage a truncated reply — runs exactly as it does without this.
+    """
+
+    async def counting(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await call(*args, **kwargs)
+        except BaseException as error:
+            failures.record_error(error)
+            raise
+
+    return counting
 
 
 def model_connection(

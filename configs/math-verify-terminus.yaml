@@ -105,7 +105,12 @@ agent:
     # NL2RepoBench allows an hour per task, so seventy-five turns have to fit
     # inside it. `run.agent_timeout_multiplier` is the knob if they do not.
     max_turns: 75
-    temperature: 0.0
+
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
+
     # Terminus ships a JSON and an XML tool-call format and defaults to JSON.
     parser_name: json
     # A task that writes a whole repository is long. With this off, the

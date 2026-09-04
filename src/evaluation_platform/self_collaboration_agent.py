@@ -7,7 +7,10 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import SELF_COLLABORATION
+from evaluation_platform.experiment_config import (
+    SELF_COLLABORATION,
+    resolve_generation_kwargs,
+)
 from evaluation_platform.model_usage import populate_usage_context
 from evaluation_platform.self_collaboration_trajectory import write_trajectory
 
@@ -53,9 +56,15 @@ class SelfCollaborationAgent(BaseInstalledAgent):
         }
         self.repository = kwargs.pop("repository", SELF_COLLABORATION_REPOSITORY)
         self.commit = kwargs.pop("commit", SELF_COLLABORATION_COMMIT)
+        # The sampling parameters are set for every arm at once and arrive
+        # beside the solution's own hyperparameters. Taking them out here keeps
+        # them from reaching Harbor's constructor, which has no use for them,
+        # and merging them back in below is what puts them in front of the
+        # in-container runner under the names it already reads.
+        self.generation = resolve_generation_kwargs(kwargs)
         SELF_COLLABORATION.reject_foreign(kwargs)
         super().__init__(*args, **kwargs)
-        self.hyperparameters = SELF_COLLABORATION.resolve(hyperparameters)
+        self.hyperparameters = SELF_COLLABORATION.resolve(hyperparameters) | self.generation
         # Kept from `run` so that the trajectory written afterwards can open on
         # the task the solution was given. The session history the tool writes
         # does not record it, and the conversion happens after the container is
@@ -93,6 +102,7 @@ class SelfCollaborationAgent(BaseInstalledAgent):
                 "run_self_collaboration.py",
                 "model_usage.py",
                 "model_routing.py",
+                "failure_categories.py",
         ):
             await self._upload_agent_owned_file(
                 environment,

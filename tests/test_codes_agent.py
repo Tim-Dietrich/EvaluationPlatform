@@ -19,7 +19,13 @@ from evaluation_platform.codes_agent import (
     TASK_WORKSPACE,
     CodeSAgent,
 )
-from evaluation_platform.experiment_config import CODE_S, ConfigurationError
+from evaluation_platform.experiment_config import (
+    CODE_S,
+    ConfigurationError,
+    resolve_generation_kwargs,
+)
+from evaluation_platform.failure_categories import FailureTally
+from evaluation_platform.model_routing import ServedProviders
 from evaluation_platform.model_usage import UsageTotals
 from evaluation_platform import run_codes
 from evaluation_platform.run_codes import (
@@ -93,6 +99,7 @@ def test_install_pins_the_revision_and_uploads_the_runner(tmp_path):
         "/installed-agent/run_codes.py",
         "/installed-agent/model_usage.py",
         "/installed-agent/model_routing.py",
+        "/installed-agent/failure_categories.py",
     ]
 
 
@@ -161,7 +168,7 @@ def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tm
 
 def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
     environment = RecordingEnvironment()
-    agent = CodeSAgent(logs_dir=tmp_path, temperature=0.3, concurrent_requests=8)
+    agent = CodeSAgent(logs_dir=tmp_path, concurrent_requests=8)
 
     asyncio.run(
         agent.run(
@@ -172,10 +179,13 @@ def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
     )
 
     hyperparameters = json.loads(uploaded(environment)[HYPERPARAMETERS_PATH])
-    assert hyperparameters["temperature"] == 0.3
     assert hyperparameters["concurrent_requests"] == 8
     assert hyperparameters["request_attempts"] == 5
     assert hyperparameters["retry_temperature"] == 0.1
+    # The sampling this pipeline's every request will carry, from the one file
+    # that sets it for every arm, beside the solution's own settings.
+    shared = resolve_generation_kwargs({})
+    assert {name: hyperparameters[name] for name in shared} == shared
 
 
 @pytest.mark.parametrize(
@@ -183,7 +193,10 @@ def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
     [
         {"concurrent_requests": 0},
         {"request_attempts": "many"},
-        {"temperature": "cold"},
+        {"retry_temperature": "cold"},
+        # Sampling is not this solution's to state; it is set for every arm at
+        # once in `configs/generation.yaml`.
+        {"temperature": 0.3},
         # CodeTeam's, which CodeS has no stage for.
         {"architects": 4},
         # Self-Collaboration's, likewise.
@@ -645,9 +658,17 @@ class FakeClient:
         self.chat = SimpleNamespace(completions=RecordingCompletions(responses))
 
 
-def response(content="ok", prompt=10, completion=5, cached=2, reasoning=1, cost=0.5):
+def response(
+        content="ok", prompt=10, completion=5, cached=2, reasoning=1, cost=0.5,
+        finish_reason="stop",
+):
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
+            )
+        ],
         usage=SimpleNamespace(
             prompt_tokens=prompt,
             completion_tokens=completion,
@@ -662,15 +683,19 @@ class RateLimited(Exception):
     status_code = 429
 
 
-def requester(responses, totals=None, waits=None, **hyperparameters):
+def requester(responses, totals=None, waits=None, failures=None, **hyperparameters):
     client = FakeClient(responses)
-    resolved = CODE_S.resolve(hyperparameters)
+    # The same split the agent makes: sampling comes from the shared file (or
+    # from all three stated together), the rest is the solution's own.
+    generation = resolve_generation_kwargs(hyperparameters)
+    resolved = CODE_S.resolve(hyperparameters) | generation
     request = _requester(
         client,
         resolved,
         totals if totals is not None else UsageTotals(),
         _Budget(resolved, totals if totals is not None else UsageTotals()),
         model="test/model",
+        failures=failures,
         sleep=(waits if waits is not None else []).append,
     )
     return client, request
@@ -697,23 +722,32 @@ def test_the_request_the_tool_builds_carries_what_the_tool_omits():
     assert call["extra_body"] == {"reasoning": {"enabled": False}}
 
 
-def test_omitting_a_sampling_setting_sends_the_request_the_tool_would_send():
-    """The tool's own request carries model, temperature and messages only."""
+def test_the_two_the_tool_omits_are_sent_whether_or_not_they_were_stated():
+    """The tool's own request carries model, temperature and messages only.
+
+    All three sampling parameters are sent here regardless, because they are
+    not this solution's to leave out: every arm sends the same three, from the
+    same file, or the comparison is between token budgets as much as between
+    methods. Reproducing the tool's request exactly would mean letting the
+    provider choose two of them, differently from every other arm.
+    """
     client, request = requester([response()])
 
     request({"instruction": "write the file"})
 
-    assert sorted(client.chat.completions.calls[0]) == [
-        "messages",
-        "model",
-        "temperature",
-    ]
+    call = client.chat.completions.calls[0]
+    assert sorted(call) == ["max_tokens", "messages", "model", "temperature", "top_p"]
+    assert {name: call[name] for name in resolve_generation_kwargs({})} == (
+        resolve_generation_kwargs({})
+    )
 
 
 def test_a_retried_request_uses_the_temperature_the_tool_retries_at():
     client, request = requester(
         [ValueError("upstream hiccup"), response()],
         temperature=0.0,
+        top_p=0.95,
+        max_tokens=4096,
         retry_temperature=0.25,
     )
 
@@ -786,6 +820,80 @@ def test_the_tools_own_attempt_count_bounds_the_requests_a_prompt_costs():
         request({"instruction": "write it"})
 
     assert len(client.chat.completions.calls) == 3
+
+
+def test_a_sketch_cut_off_at_the_ceiling_is_counted_rather_than_scored():
+    """CodeS's failure mode at the ceiling is a parse failure, not a test failure.
+
+    FileSketcher returns a whole file of signatures per response and
+    SketchFiller returns a whole function. A response cut off mid-definition
+    does not fail a test — the file it belonged to is written as an unfilled
+    sketch — so the reward says nothing about what happened.
+    """
+    failures = FailureTally()
+    _, request = requester([response(finish_reason="length")], failures=failures)
+
+    request({"instruction": "write the file"})
+
+    assert failures.to_dict()["counts"]["output_limit_exhausted"] == 1
+    assert failures.to_dict()["counts"]["context_exhausted"] == 0
+
+
+def test_a_prompt_the_context_window_cannot_hold_is_counted_apart():
+    """The phase most able to overflow: a function body prompt carries the
+    file's own sketch and the sketches it imports."""
+
+    class BadRequest(Exception):
+        status_code = 400
+
+    failures = FailureTally()
+    refusal = BadRequest("maximum context length is 65536 tokens")
+    _, request = requester(
+        [refusal, refusal], request_attempts=2, failures=failures
+    )
+
+    with pytest.raises(RuntimeError):
+        request({"instruction": "write the file"})
+
+    counts = failures.to_dict()["counts"]
+    assert counts["context_exhausted"] == 2
+    assert counts["output_limit_exhausted"] == 0
+    assert counts["request_timeout"] == 0
+
+
+def test_the_run_records_the_sampling_every_phase_used(tmp_path, monkeypatch):
+    """Every request in this pipeline is built from the same three values.
+
+    `retry_temperature` is recorded beside them because it is the temperature an
+    attempt after the first actually used, which the shared value alone does not
+    say. The rest of the pipeline's shape is recorded elsewhere in the same file.
+    """
+    monkeypatch.setattr(
+        run_codes, "RESOLVED_SETUP_PATH", tmp_path / "resolved-setup.json"
+    )
+    monkeypatch.setattr(run_codes, "CODES_ROOT", tmp_path)
+    hyperparameters = resolve_generation_kwargs({}) | CODE_S.resolve({})
+
+    run_codes._record_resolved_setup(
+        hyperparameters,
+        {phase: [] for phase in run_codes.PHASES},
+        None,
+        None,
+        ServedProviders(),
+    )
+
+    recorded = json.loads(
+        (tmp_path / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    shared = resolve_generation_kwargs({})
+    assert {name: recorded["generation"][name] for name in shared} == shared
+    assert recorded["generation"]["source"] == "configs/generation.yaml"
+    assert recorded["generation"]["retry_temperature"] == 0.1
+    assert recorded["failures"]["counts"] == {
+        "output_limit_exhausted": 0,
+        "context_exhausted": 0,
+        "request_timeout": 0,
+    }
 
 
 def test_a_rate_limit_is_recognised_by_status_before_message():

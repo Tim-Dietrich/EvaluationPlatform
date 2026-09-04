@@ -1,0 +1,49 @@
+# The sampling parameters, for every arm of the comparison.
+#
+# This file is the one place they are set. No arm carries a default of its own,
+# no runner hardcodes a value, and `agent.hyperparameters` in an experiment
+# configuration rejects these three names with a pointer back here. Every
+# configuration in this directory reads this file, whichever solution it runs,
+# so the three values below are the three values each arm sends.
+#
+# Why they are not per-arm. Temperature, top_p and the output ceiling decide how
+# the model draws its tokens and how much room it has to answer. They are
+# properties of the *model call*, not of the method wrapped around it, in
+# exactly the way `model.routing` is a property of the endpoint rather than of a
+# method. An arm sampling at 0.2 where another samples at 0.0 is not a
+# comparison of scaffolds, and the difference does not announce itself in a
+# reward figure. Before this file, CodeTeam ran at 0.2 and everything else at
+# 0.0, and the four arms' output ceilings spanned 8192 to 32768.
+#
+# What each run records. Every arm writes the values it actually used into its
+# `resolved-setup.json` under `generation`, together with how each one reached
+# the provider, so a recorded result can be checked against the sampling that
+# produced it rather than against this file's current contents.
+
+# Deterministic decoding, which is what every arm but CodeTeam already asked
+# for. A comparison of methods should not be reading sampling noise.
+temperature: 0.0
+
+# Inert at temperature 0.0 for most providers, and stated anyway: sampling that
+# is not pinned is not part of the record, and a later run at a temperature
+# above zero should not silently change two things at once.
+top_p: 0.95
+
+# The per-request output ceiling. It is a cap rather than a target: an arm that
+# answers a file at a time reaches nothing near it, and nothing about its
+# behaviour changes by raising it.
+#
+# The figure is the largest of the ceilings the arms used before this file, and
+# it is the largest because of Single-Shot. That arm has to fit an entire
+# repository into one reply, where the others spend their budget a file or a
+# function at a time; below ~16k it measures the ceiling rather than the model,
+# which is the one way a baseline can be unfair without looking it. Levelling
+# down to 8192 would cripple it; levelling every arm up to its ceiling costs the
+# others nothing.
+#
+# A reply that reaches this ceiling anyway is recorded as
+# `output_limit_exhausted` in the run's failure categories, and a request the
+# provider refuses because the prompt plus this ceiling overflows the context
+# window is recorded as `context_exhausted`. The two are distinct, and both are
+# distinct from a timeout and from a test that failed.
+max_tokens: 32768

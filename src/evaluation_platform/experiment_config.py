@@ -23,6 +23,25 @@ from evaluation_platform.model_routing import ROUTING_ENV, ROUTING_KEYS
 
 DEFAULT_CONFIG_PATH = Path("configs/math-verify-self-collaboration.yaml")
 
+# The project root, as seen from this module inside `src/evaluation_platform/`.
+_ROOT = Path(__file__).resolve().parents[2]
+
+# The sampling parameters, and the one file that sets them.
+#
+# These three are deliberately not hyperparameters of any solution. They
+# describe the model call rather than the method wrapped around it, in the way
+# `model.routing` describes the endpoint rather than the method, and an arm that
+# samples differently from another is not a comparison of scaffolds. So no arm
+# below declares them, no arm defaults them, and a configuration that states one
+# under `agent.hyperparameters` is rejected with a pointer to the file that
+# does. `configs/generation.yaml` explains the values themselves.
+GENERATION_PARAMETERS: Mapping[str, type] = {
+    "temperature": float,
+    "top_p": float,
+    "max_tokens": int,
+}
+GENERATION_CONFIG_PATH = _ROOT / "configs" / "generation.yaml"
+
 # Each code generation solution has its own roles and its own knobs, so the
 # hyperparameters a configuration may state depend on which one it runs. A
 # solution is identified by the module of `agent.import_path`, and a
@@ -76,6 +95,17 @@ class AgentHyperparameters:
         what is archived and what Harbor records is the effective setup rather
         than only the part that was written down.
         """
+        sampling = sorted(set(values) & set(GENERATION_PARAMETERS))
+        if sampling:
+            raise ConfigurationError(
+                f"{', '.join(sampling)} are set for every arm at once in "
+                f"{GENERATION_CONFIG_PATH.name}, not per solution. Stating "
+                f"{sampling[0]!r} here would sample {self.solution} differently "
+                "from the arms it is compared with, which is a difference the "
+                f"reward cannot show. Remove the key; edit "
+                f"configs/{GENERATION_CONFIG_PATH.name} to change the value for "
+                "the whole comparison."
+            )
         unknown = set(values) - set(self.types)
         if unknown:
             raise ConfigurationError(
@@ -145,9 +175,6 @@ SELF_COLLABORATION = AgentHyperparameters(
         "max_rounds": int,
         "analyst_steps": int,
         "coder_steps": int,
-        "max_tokens": int,
-        "temperature": float,
-        "top_p": float,
         "test_command": str,
         "reasoning_effort": str,
         "request_extra": dict,
@@ -156,9 +183,6 @@ SELF_COLLABORATION = AgentHyperparameters(
         "max_rounds": 3,
         "analyst_steps": 10,
         "coder_steps": 15,
-        "max_tokens": 8192,
-        "temperature": 0.0,
-        "top_p": 0.95,
     },
 )
 
@@ -197,11 +221,8 @@ CODE_TEAM = AgentHyperparameters(
         "rag_enabled": bool,
         "rag_backend": str,
         "rag_top_k": int,
-        # Sampling, and the budgets that bound a run the tool would otherwise
-        # let run until Harbor's timeout.
-        "max_tokens": int,
-        "temperature": float,
-        "top_p": float,
+        # The budgets that bound a run the tool would otherwise let run until
+        # Harbor's timeout. Sampling is not here: see GENERATION_PARAMETERS.
         "reasoning_effort": str,
         "request_extra": dict,
         "max_wall_clock_seconds": int,
@@ -218,9 +239,6 @@ CODE_TEAM = AgentHyperparameters(
         "rag_enabled": False,
         "rag_backend": "faiss_hnsw",
         "rag_top_k": 5,
-        "max_tokens": 8192,
-        "temperature": 0.2,
-        "top_p": 0.95,
     },
     choices={"rag_backend": RAG_BACKENDS},
 )
@@ -233,15 +251,17 @@ CODE_TEAM = AgentHyperparameters(
 # CodeS is how a request is made rather than who makes it.
 #
 # The defaults are the tool's own, including the two it hardcodes in its
-# driver: five attempts per request, the first at `temperature` and the rest at
-# `retry_temperature`. `concurrent_requests` defaults to 1, which is the
+# driver: five attempts per request, the first at the run's temperature and the
+# rest at `retry_temperature`. `concurrent_requests` defaults to 1, which is the
 # published pipeline exactly — every request in sequence.
 #
-# Six hyperparameters have no default. `max_tokens` and `top_p` are absent from
-# the tool's own request, so leaving them out sends what it sends and lets the
-# provider decide; the budgets bound a pipeline that bounds nothing itself,
-# since the number of requests is the number of files and functions the model
-# chose to propose.
+# Four hyperparameters have no default: the budgets bound a pipeline that bounds
+# nothing itself, since the number of requests is the number of files and
+# functions the model chose to propose. `retry_temperature` is the one sampling
+# figure that stays here rather than moving to `configs/generation.yaml`,
+# because it is not a setting the other arms have: it is the tool's own
+# behaviour on a refused request, and the temperature every arm shares is the
+# one the first attempt uses.
 CODE_S = AgentHyperparameters(
     solution="CodeS",
     label="codes",
@@ -253,10 +273,7 @@ CODE_S = AgentHyperparameters(
         # fan-out phases are batches of independent requests, so this changes
         # how long a task takes and not what is asked.
         "concurrent_requests": int,
-        # Sampling.
-        "max_tokens": int,
-        "temperature": float,
-        "top_p": float,
+        # Sampling is not here: see GENERATION_PARAMETERS.
         "reasoning_effort": str,
         "request_extra": dict,
         # The budgets that bound a pipeline whose length the model chooses.
@@ -265,7 +282,6 @@ CODE_S = AgentHyperparameters(
     },
     defaults={
         "request_attempts": 5,
-        "temperature": 0.0,
         "retry_temperature": 0.1,
         "concurrent_requests": 1,
     },
@@ -286,18 +302,16 @@ CODE_S = AgentHyperparameters(
 # and recorded by digest with every run, because a control whose prompt is a
 # knob has stopped being a control and become a fourth solution.
 #
-# `max_tokens` defaults far above the 8192 the other solutions use. They spend
-# their budget one file or one function at a time; this one has to fit a whole
-# repository into a single reply. A reply that reaches the ceiling is recorded
-# as truncated rather than graded silently, because a baseline that ran out of
-# output tokens and one that did not know the answer are different findings.
+# This arm is the reason the shared output ceiling is set as high as it is. The
+# others spend their budget one file or one function at a time; this one has to
+# fit a whole repository into a single reply. A reply that reaches the ceiling
+# is recorded as truncated, and counted as `output_limit_exhausted`, rather than
+# graded silently — because a baseline that ran out of output tokens and one
+# that did not know the answer are different findings.
 SINGLE_SHOT = AgentHyperparameters(
     solution="Single-Shot",
     label="single-shot",
     types={
-        "max_tokens": int,
-        "temperature": float,
-        "top_p": float,
         "reasoning_effort": str,
         "request_extra": dict,
         # One request means one chance, so a provider hiccup would otherwise
@@ -313,9 +327,6 @@ SINGLE_SHOT = AgentHyperparameters(
         "request_timeout_seconds": int,
     },
     defaults={
-        "max_tokens": 32768,
-        "temperature": 0.0,
-        "top_p": 0.95,
         "request_attempts": 3,
         "request_timeout_seconds": 600,
     },
@@ -335,11 +346,16 @@ SINGLE_SHOT = AgentHyperparameters(
 # runs is the Terminus of whichever Harbor release this project is installed
 # with, which the adapter records per run.
 #
-# `max_turns` and `temperature` have no default, for the reason CodeTeam's and
-# CodeS's budgets have none. Terminus bounds itself at a million turns, which
-# is no bound at all, and sends no temperature unless given one, which leaves
-# the draw to the provider. Both are choices a configuration should have to
-# make out loud.
+# `max_turns` has no default, for the reason CodeTeam's and CodeS's budgets have
+# none: Terminus bounds itself at a million turns, which is no bound at all, and
+# a run's cost should be a choice a configuration makes out loud.
+#
+# It is also the arm where the shared sampling parameters take two routes rather
+# than one. Terminus accepts a `temperature` of its own and has no parameter for
+# the other two, so the adapter passes `top_p` and `max_tokens` through
+# `llm_kwargs`, which Harbor's LiteLLM wrapper spreads into the body of every
+# request. Same three values, same requests; each run's `resolved-setup.json`
+# says which route each one took.
 TERMINUS_REASONING_EFFORTS = (
     "none",
     "minimal",
@@ -362,7 +378,6 @@ TERMINUS = AgentHyperparameters(
     label="terminus-2-baseline",
     types={
         "max_turns": int,
-        "temperature": float,
         "reasoning_effort": str,
         # Merged into the request body verbatim, exactly as it is for the three
         # solutions that reach the provider through the OpenAI client. Terminus
@@ -415,6 +430,8 @@ _TOP_LEVEL_KEYS = {
     "task",
     "model",
     "agent",
+    # Only an archived setup states this; see `load_experiment_config`.
+    "generation",
 }
 # The `run` block is Harbor's own job configuration, narrowed to the keys this
 # project has a use for. Beyond where results land, it is what makes a
@@ -480,6 +497,118 @@ class ConfigurationError(ValueError):
 
 
 @dataclass(frozen=True)
+class GenerationConfig:
+    """The sampling parameters this run used, and where they came from.
+
+    One of these per run, shared by every arm. `source` is recorded rather than
+    assumed: a run launched from `configs/` reads the central file, and a run
+    resumed from an archived snapshot reads the values pinned in that snapshot,
+    which is what keeps a resumed job sampling the way its first half did.
+    """
+
+    temperature: float
+    top_p: float
+    max_tokens: int
+    source: str
+
+    def as_kwargs(self) -> dict[str, Any]:
+        """The three values, under the names every request builder uses."""
+        return {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+        }
+
+    def to_snapshot(self) -> dict[str, Any]:
+        """The block an archived setup carries, so a resume pins these values."""
+        return self.as_kwargs()
+
+
+def load_generation_config(
+        path: Path | None = None,
+        stated: Mapping[str, Any] | None = None,
+) -> GenerationConfig:
+    """The run's sampling parameters, from the one file that sets them.
+
+    `stated` is the block an archived snapshot carries. It is read in place of
+    the file so that resuming a job continues it at the sampling it started
+    with, rather than at whatever the central file says today.
+    """
+    if stated is not None:
+        return _build_generation(stated, source="the archived setup")
+
+    path = path or GENERATION_CONFIG_PATH
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ConfigurationError(
+            f"No sampling configuration at {path}. It is the one place "
+            f"{', '.join(GENERATION_PARAMETERS)} are set, and every arm reads "
+            "it."
+        ) from error
+    except yaml.YAMLError as error:
+        raise ConfigurationError(f"{path} is not valid YAML: {error}") from error
+    return _build_generation(
+        _require_mapping(document, "the sampling configuration", str(path)),
+        source=str(path),
+    )
+
+
+def _build_generation(
+        document: Mapping[str, Any],
+        source: str,
+) -> GenerationConfig:
+    _reject_unknown(
+        document, set(GENERATION_PARAMETERS), "the sampling configuration", source
+    )
+    missing = sorted(set(GENERATION_PARAMETERS) - set(document))
+    if missing:
+        raise ConfigurationError(
+            f"The sampling configuration in {source} is missing "
+            f"{', '.join(missing)}. All of {', '.join(GENERATION_PARAMETERS)} "
+            "are stated there, so that what a run sampled at is a value that "
+            "was written down rather than a library's default."
+        )
+    values = {
+        name: _coerce_hyperparameter(name, document[name], expected)
+        for name, expected in GENERATION_PARAMETERS.items()
+    }
+    return GenerationConfig(**values, source=source)
+
+
+def resolve_generation_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Take the shared sampling values out of an agent's kwargs.
+
+    `to_harbor_config` puts them there beside the solution's own
+    hyperparameters, so an agent built by a job receives them and this removes
+    them before Harbor's own constructor sees names it has no use for.
+
+    An agent built by hand — in a test, or from a Python prompt — receives none
+    of them, and falls back to the same central file the launcher reads. That
+    keeps a directly constructed agent sampling the way a launched one does,
+    with the values still coming from exactly one place. Some but not all three
+    is the one case that is refused: they travel together, and two out of three
+    means a run sampling at a value nobody chose.
+    """
+    stated = {
+        name: kwargs.pop(name)
+        for name in list(GENERATION_PARAMETERS)
+        if name in kwargs
+    }
+    if not stated:
+        return load_generation_config().as_kwargs()
+    missing = sorted(set(GENERATION_PARAMETERS) - set(stated))
+    if missing:
+        raise ConfigurationError(
+            f"The sampling parameters reach an agent together, and "
+            f"{', '.join(missing)} did not arrive. Pass all of "
+            f"{', '.join(GENERATION_PARAMETERS)} or none of them, in which case "
+            f"configs/{GENERATION_CONFIG_PATH.name} is read."
+        )
+    return _build_generation(stated, source="the agent's kwargs").as_kwargs()
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     """A fully resolved experiment setup, ready to launch and to archive."""
 
@@ -499,6 +628,11 @@ class ExperimentConfig:
     # same experiment. `None` leaves the choice to the aggregator, which makes
     # it by price and does not record what it chose.
     model_routing: dict[str, Any] | None
+    # The sampling parameters, shared by every arm and set in one file. Beside
+    # the model rather than in any solution's hyperparameters, for the reason
+    # routing is: how a model draws its tokens is not a property of the method
+    # wrapped around it.
+    generation: GenerationConfig
     agent_import_path: str
     agent_n_concurrent: int | None
     agent_repository: str | None
@@ -529,7 +663,11 @@ class ExperimentConfig:
             # the job records the agent it ran.
             "name": agent_hyperparameters(self.agent_import_path).label,
             "model_name": self.model_label,
-            "kwargs": dict(self.hyperparameters),
+            # The solution's own hyperparameters, plus the three sampling
+            # values every arm shares. Both reach the agent the same way and
+            # both are recorded in the job's `config.json`, so what a run
+            # sampled at is on file beside what it was configured to do.
+            "kwargs": {**self.hyperparameters, **self.generation.as_kwargs()},
             "env": {
                 self.api_key_env: "${" + self.api_key_env + "}",
                 "API_KEY_ENV": self.api_key_env,
@@ -582,6 +720,10 @@ class ExperimentConfig:
             "description": self.description,
             "run": dict(self.run),
             **source,
+            # Pinned into the snapshot, in the way the benchmark's digest is:
+            # a job resumed next week continues at the sampling it started
+            # with, whatever the central file says by then.
+            "generation": self.generation.to_snapshot(),
             "model": {
                 "provider": self.model_provider,
                 "name": self.model_name,
@@ -600,8 +742,15 @@ class ExperimentConfig:
 def load_experiment_config(
         path: Path,
         environment: Mapping[str, str],
+        archived: bool = False,
 ) -> ExperimentConfig:
-    """Read, expand, and validate the experiment configuration at `path`."""
+    """Read, expand, and validate the experiment configuration at `path`.
+
+    `archived` reads a snapshot this platform wrote rather than a configuration
+    somebody wrote. The difference is the `generation` block: a snapshot carries
+    the sampling the job ran at and is resumed on it, while a hand-written
+    configuration has no say in sampling at all and is told so.
+    """
     try:
         document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError as error:
@@ -610,7 +759,7 @@ def load_experiment_config(
         raise ConfigurationError(f"{path} is not valid YAML: {error}") from error
 
     document = _expand_templates(document, environment, where=str(path))
-    return _build_config(document, environment, source=str(path))
+    return _build_config(document, environment, source=str(path), archived=archived)
 
 
 def agent_hyperparameters(import_path: str) -> AgentHyperparameters:
@@ -674,9 +823,26 @@ def _build_config(
         document: Any,
         environment: Mapping[str, str],
         source: str,
+        archived: bool = False,
 ) -> ExperimentConfig:
     document = _require_mapping(document, "the configuration", source)
     _reject_unknown(document, _TOP_LEVEL_KEYS, "the configuration", source)
+
+    stated_generation = document.get("generation")
+    if stated_generation is not None and not archived:
+        raise ConfigurationError(
+            f"{source} states a 'generation' block. "
+            f"{', '.join(GENERATION_PARAMETERS)} are set once for every arm in "
+            f"configs/{GENERATION_CONFIG_PATH.name}, so that a difference "
+            "between two runs is a difference between the methods. Remove the "
+            "block; the value archived beside a job is a record of what ran, "
+            "not a second place to set it."
+        )
+    generation = load_generation_config(
+        stated=_require_mapping(stated_generation, "'generation'", source)
+        if stated_generation is not None
+        else None
+    )
 
     run = _require_mapping(document.get("run", {}), "'run'", source)
     _reject_unknown(run, _RUN_KEYS, "'run'", source)
@@ -723,6 +889,7 @@ def _build_config(
         base_url=base_url,
         api_key_env=api_key_env,
         model_routing=_build_routing(model, source),
+        generation=generation,
         agent_import_path=import_path,
         agent_n_concurrent=agent.get("n_concurrent"),
         agent_repository=agent.get("repository"),

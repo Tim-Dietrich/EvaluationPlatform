@@ -37,6 +37,7 @@ from typing import Any, Callable
 # import this module from the package, that same directory is the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from failure_categories import FailureTally  # noqa: E402
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
 from model_routing import (  # noqa: E402
     ServedProviders,
@@ -102,6 +103,7 @@ def main() -> None:
     totals = UsageTotals()
     routing = routing_from_env()
     observed = ServedProviders()
+    failures = FailureTally()
     try:
         answer, finish_reason = _request(
             _client(hyperparameters["request_timeout_seconds"]),
@@ -111,6 +113,7 @@ def main() -> None:
             os.environ["MODEL"],
             routing=routing,
             observed=observed,
+            failures=failures,
         )
     finally:
         USAGE_PATH.write_text(
@@ -130,6 +133,7 @@ def main() -> None:
         stripped_root=stripped_root,
         routing=routing,
         providers=observed.names(),
+        failures=failures,
     )
 
     print(f"Wrote {len(written)} file(s) to {WORKSPACE}.")
@@ -298,6 +302,7 @@ def _request(
         model: str,
         routing: dict[str, Any] | None = None,
         observed: ServedProviders | None = None,
+        failures: FailureTally | None = None,
         sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[str, str | None]:
     """Send the one request, retrying only what a retry can fix.
@@ -305,7 +310,12 @@ def _request(
     The attempts re-send the same prompt after a provider failure; they are not
     a second look at the answer, and a run that used all of them still made one
     request that returned. How many were needed is recorded either way.
+
+    Every attempt is classified, whether it returned or raised, so that a run
+    that ended at the output ceiling and one the provider refused for a prompt
+    it could not fit are two findings in the record rather than one bad reward.
     """
+    failures = failures if failures is not None else FailureTally()
     attempts = hyperparameters["request_attempts"]
     body: dict[str, Any] = {
         "model": model,
@@ -347,6 +357,7 @@ def _request(
             if observed is not None:
                 observed.record(response)
             choice = response.choices[0]
+            failures.record_finish_reason(getattr(choice, "finish_reason", None))
             content = choice.message.content
             if not content:
                 # A reply that is empty — filtered, or reasoning with nothing
@@ -355,6 +366,7 @@ def _request(
                 raise ValueError("the model returned an empty completion")
             return content, getattr(choice, "finish_reason", None)
         except Exception as error:  # noqa: BLE001 - reported below.
+            failures.record_error(error)
             failure = error
 
     raise RuntimeError(
@@ -417,6 +429,7 @@ def _record_resolved_setup(
         stripped_root: str | None = None,
         routing: dict[str, Any] | None = None,
         providers: list[str] | None = None,
+        failures: FailureTally | None = None,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -441,6 +454,13 @@ def _record_resolved_setup(
                 "routing": routing,
                 "providers_served": providers or [],
                 "hyperparameters": hyperparameters,
+                # The sampling this run actually used, read back out of the
+                # values the request was built from rather than off the file
+                # that supplied them, which may have moved on since.
+                "generation": _generation(hyperparameters),
+                # Why the run ended where it did, in categories that stay apart
+                # from each other, from a timeout, and from a failing test.
+                "failures": (failures or FailureTally()).to_dict(),
                 "requests": requests,
                 "finish_reason": finish_reason,
                 "truncated": finish_reason == "length",
@@ -464,6 +484,23 @@ def _record_resolved_setup(
         ),
         encoding="utf-8",
     )
+
+
+def _generation(hyperparameters: dict[str, Any]) -> dict[str, Any]:
+    """The sampling values this run sent, and where they came from.
+
+    Written from the resolved hyperparameters the request was built out of, so
+    the record is of what was used rather than of what was configured. The two
+    agree unless something between the configuration and the request changed
+    them, which is the case worth being able to see.
+    """
+    return {
+        "temperature": hyperparameters["temperature"],
+        "top_p": hyperparameters["top_p"],
+        "max_tokens": hyperparameters["max_tokens"],
+        "source": "configs/generation.yaml",
+        "applied_via": "request body, one request",
+    }
 
 
 def _common_root(written: list[str]) -> str | None:

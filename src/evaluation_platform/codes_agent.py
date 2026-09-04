@@ -7,7 +7,10 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import CODE_S
+from evaluation_platform.experiment_config import (
+    CODE_S,
+    resolve_generation_kwargs,
+)
 from evaluation_platform.model_usage import populate_usage_context
 
 CODES_COMMIT = "0b624ab4ef22b0d9d223f274a986eb27fe090c88"
@@ -61,9 +64,15 @@ class CodeSAgent(BaseInstalledAgent):
         }
         self.repository = kwargs.pop("repository", CODES_REPOSITORY)
         self.commit = kwargs.pop("commit", CODES_COMMIT)
+        # The sampling parameters are set for every arm at once and arrive
+        # beside the solution's own hyperparameters. Taking them out here keeps
+        # them from reaching Harbor's constructor, which has no use for them,
+        # and merging them back in below is what puts them in front of the
+        # in-container runner under the names it already reads.
+        self.generation = resolve_generation_kwargs(kwargs)
         CODE_S.reject_foreign(kwargs)
         super().__init__(*args, **kwargs)
-        self.hyperparameters = CODE_S.resolve(hyperparameters)
+        self.hyperparameters = CODE_S.resolve(hyperparameters) | self.generation
 
     @staticmethod
     def name() -> str:
@@ -104,7 +113,12 @@ class CodeSAgent(BaseInstalledAgent):
             # reporting in seconds that it could not read the repository.
             env=GIT_NON_INTERACTIVE,
         )
-        for module in ("run_codes.py", "model_usage.py", "model_routing.py"):
+        for module in (
+                "run_codes.py",
+                "model_usage.py",
+                "model_routing.py",
+                "failure_categories.py",
+        ):
             await self._upload_agent_owned_file(
                 environment,
                 Path(__file__).with_name(module),

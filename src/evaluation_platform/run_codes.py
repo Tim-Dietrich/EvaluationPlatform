@@ -47,6 +47,7 @@ from typing import Any, Callable
 # import this module from the package, that same directory is the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from failure_categories import FailureTally  # noqa: E402
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
 from model_routing import (  # noqa: E402
     ServedProviders,
@@ -98,6 +99,7 @@ def main() -> None:
     install_client_routing(routing, observed)
 
     totals = UsageTotals()
+    failures = FailureTally()
     budget = _Budget(hyperparameters, totals)
     request = _requester(
         _client(),
@@ -105,6 +107,7 @@ def main() -> None:
         totals,
         budget,
         model=os.environ["MODEL"],
+        failures=failures,
     )
     records: dict[str, list[dict[str, Any]]] = {phase: [] for phase in PHASES}
 
@@ -129,7 +132,7 @@ def main() -> None:
         outcome = _guarded(lambda: _write_repository(tool, records))
         _guarded(
             lambda: _record_resolved_setup(
-                hyperparameters, records, outcome, routing, observed
+                hyperparameters, records, outcome, routing, observed, failures
             )
         )
     print(f"Done. Repo at: {WORKSPACE}")
@@ -235,6 +238,7 @@ def _requester(
         totals: UsageTotals,
         budget: "_Budget",
         model: str,
+        failures: FailureTally | None = None,
         sleep: Callable[[float], None] = time.sleep,
 ) -> Callable[[dict[str, Any]], str]:
     """One request, made the way the tool makes it, with four things added.
@@ -247,32 +251,41 @@ def _requester(
 
     Added around it: the token limit and `top_p` the tool never sends, the
     reasoning fields it has no notion of, a wait between attempts when the
-    provider is throttling rather than refusing, and the usage accounting every
-    solution in this platform shares. The wait is inside the tool's own attempt
-    count rather than beside it, so a throttled request costs time and not a
-    multiple of the requests a configuration asked for.
+    provider is throttling rather than refusing, and the usage accounting and
+    failure categories every solution in this platform shares. The wait is
+    inside the tool's own attempt count rather than beside it, so a throttled
+    request costs time and not a multiple of the requests a configuration asked
+    for.
     """
     attempts = hyperparameters["request_attempts"]
+    failures = failures if failures is not None else FailureTally()
     lock = threading.Lock()
 
     def send(instruction: str, temperature: float) -> Any:
         body: dict[str, Any] = {
             "model": model,
             "temperature": temperature,
+            # The two the tool's own request omits. They are not optional here:
+            # every arm sends all three, from one file, or the comparison is
+            # between token budgets as much as between methods.
+            "max_tokens": hyperparameters["max_tokens"],
+            "top_p": hyperparameters["top_p"],
             "messages": [{"role": "user", "content": instruction}],
         }
-        if hyperparameters.get("max_tokens") is not None:
-            body["max_tokens"] = hyperparameters["max_tokens"]
-        if hyperparameters.get("top_p") is not None:
-            body["top_p"] = hyperparameters["top_p"]
         if hyperparameters.get("reasoning_effort"):
             body["reasoning_effort"] = hyperparameters["reasoning_effort"]
         if hyperparameters.get("request_extra"):
             body["extra_body"] = dict(hyperparameters["request_extra"])
         response = client.chat.completions.create(**body)
+        choice = response.choices[0]
         with lock:
             record_response_usage(response, totals)
-        content = response.choices[0].message.content
+            # A file sketch or a function body cut off at the ceiling does not
+            # fail a test — it fails to parse, and the file it belonged to is
+            # written as an unfilled sketch. Counting it is what separates that
+            # from a model that wrote the wrong code.
+            failures.record_finish_reason(getattr(choice, "finish_reason", None))
+        content = choice.message.content
         if not content:
             # A reply that is empty — filtered, truncated before any text, or
             # reasoning with nothing after it — is a failed attempt rather than
@@ -294,6 +307,8 @@ def _requester(
                     else hyperparameters["retry_temperature"],
                 )
             except Exception as error:  # noqa: BLE001 - reported below.
+                with lock:
+                    failures.record_error(error)
                 failure = error
         raise RuntimeError(
             f"Model {model!r} refused all {attempts} attempts at the "
@@ -663,6 +678,7 @@ def _record_resolved_setup(
         outcome: dict[str, Any] | None,
         routing: dict[str, Any] | None,
         observed: ServedProviders,
+        failures: FailureTally | None = None,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -685,6 +701,23 @@ def _record_resolved_setup(
                 "routing": routing,
                 "providers_served": observed.names(),
                 "hyperparameters": hyperparameters,
+                # The sampling every request in the pipeline was built with,
+                # read back out of the resolved hyperparameters rather than off
+                # the file that supplied them. `retry_temperature` sits beside
+                # them because it is the temperature an attempt after the first
+                # actually used, which the shared value alone does not say.
+                "generation": {
+                    "temperature": hyperparameters["temperature"],
+                    "top_p": hyperparameters["top_p"],
+                    "max_tokens": hyperparameters["max_tokens"],
+                    "source": "configs/generation.yaml",
+                    "applied_via": "request body, every phase",
+                    "retry_temperature": hyperparameters["retry_temperature"],
+                },
+                # Why a request ended where it did, in categories that stay
+                # apart from each other, from a timeout, and from a failing
+                # test.
+                "failures": (failures or FailureTally()).to_dict(),
                 "files_sketched": len(records[FILE_SKETCH]),
                 "functions_requested": len(records[FUNCTION_BODY]),
                 "requests_answered": sum(

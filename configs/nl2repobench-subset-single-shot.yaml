@@ -116,16 +116,19 @@ agent:
   import_path: evaluation_platform.single_shot_agent:SingleShotAgent
   n_concurrent: 10
   hyperparameters:
-    # The whole repository has to fit in one reply, where the other solutions
-    # spend their budget a file or a function at a time. This is the setting
-    # that decides whether a low score means the model could not write the
-    # library or simply ran out of room to say so; a reply that reaches the
-    # ceiling is recorded as `truncated` in the run's `resolved-setup.json`,
-    # so the two are distinguishable after the fact rather than conflated.
-    # Check that field before reading a poor result as a poor baseline.
-    max_tokens: 32768
-    temperature: 0.0
-    top_p: 0.95
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
+
+    # This arm is why the shared output ceiling is set where it is: the whole
+    # repository has to fit in one reply, where the other solutions spend their
+    # budget a file or a function at a time. A reply that reaches the ceiling is
+    # recorded as `truncated` in the run's `resolved-setup.json`, and counted
+    # there as `output_limit_exhausted`, so a baseline that ran out of room and
+    # one that did not know the answer stay distinguishable. Check those fields
+    # before reading a poor result as a poor baseline.
+
     # One request means one chance, and a throttled provider would otherwise
     # cost the whole task. These attempts re-send the same prompt; they are not
     # a second look at the answer, and how many were needed is recorded.

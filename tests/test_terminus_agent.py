@@ -9,10 +9,15 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.name import AgentName
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import ConfigurationError
+from evaluation_platform.experiment_config import (
+    ConfigurationError,
+    resolve_generation_kwargs,
+)
+from evaluation_platform.failure_categories import FailureTally
 from evaluation_platform.terminus_agent import (
     RESOLVED_SETUP_FILENAME,
     TerminusAgent,
+    _counting_calls,
     model_connection,
 )
 
@@ -112,7 +117,65 @@ def test_omitted_settings_leave_terminus_at_its_own_defaults(tmp_path):
     agent = terminus(tmp_path)
 
     assert agent.hyperparameters == {"parser_name": "json", "enable_summarize": True}
-    assert agent._temperature is None
+
+
+def test_the_shared_sampling_reaches_terminus_by_both_of_its_routes(tmp_path):
+    """One set of values, two parameters, because Harbor offers only one.
+
+    Terminus declares a `temperature` and nothing for the other two, so `top_p`
+    and `max_tokens` travel as `llm_kwargs`, which Harbor's LiteLLM wrapper
+    spreads into the body of every request it sends. What matters is that the
+    three values reaching the provider are the three every other arm sends.
+    """
+    shared = resolve_generation_kwargs({})
+    agent = terminus(tmp_path)
+
+    assert agent._temperature == shared["temperature"]
+    assert agent._llm._temperature == shared["temperature"]
+    assert agent._llm._llm_kwargs["top_p"] == shared["top_p"]
+    assert agent._llm._llm_kwargs["max_tokens"] == shared["max_tokens"]
+    # The credential travels the same way and is not displaced by them.
+    assert agent._llm._llm_kwargs["api_key"] == "secret-credential"
+
+
+def test_sampling_stated_for_this_arm_alone_is_refused(tmp_path):
+    """They travel together, or a run samples at a value nobody chose."""
+    with pytest.raises(ConfigurationError):
+        terminus(tmp_path, temperature=0.3)
+
+
+def test_a_token_limit_is_counted_on_the_way_past_and_not_swallowed():
+    """Terminus recovers from both of these itself, and must go on doing so.
+
+    It summarizes its history at the context ceiling and salvages what it can
+    from a truncated reply. The counter sits in front of that and re-raises, so
+    what the agent does is unchanged and what it spent recovering is on record.
+    """
+
+    class ContextLengthExceededError(Exception):
+        pass
+
+    failures = FailureTally()
+
+    async def refuse(*args, **kwargs):
+        raise ContextLengthExceededError("no room")
+
+    counting = _counting_calls(refuse, failures)
+
+    with pytest.raises(ContextLengthExceededError):
+        asyncio.run(counting("prompt"))
+
+    assert failures.to_dict()["counts"]["context_exhausted"] == 1
+
+
+def test_a_call_that_succeeds_is_returned_untouched():
+    failures = FailureTally()
+
+    async def answer(prompt):
+        return f"answered {prompt}"
+
+    assert asyncio.run(_counting_calls(answer, failures)("x")) == "answered x"
+    assert failures.to_dict()["counts"]["context_exhausted"] == 0
 
 
 @pytest.mark.parametrize(
@@ -123,8 +186,6 @@ def test_omitted_settings_leave_terminus_at_its_own_defaults(tmp_path):
         {"commit": "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"},
         # Self-Collaboration's, which Terminus has no role for.
         {"analyst_steps": 10},
-        # CodeS's, which would be accepted by Harbor and then do nothing.
-        {"max_tokens": 8192},
         {"parser_name": "yaml"},
         {"reasoning_effort": "extreme"},
         {"max_turns": 0},
@@ -136,7 +197,7 @@ def test_settings_that_would_decide_nothing_are_rejected(tmp_path, setting):
 
 
 def test_the_setup_is_recorded_where_the_other_arms_record_theirs(tmp_path):
-    agent = terminus(tmp_path, max_turns=75, temperature=0.0)
+    agent = terminus(tmp_path, max_turns=75)
 
     agent._record_resolved_setup()
 
@@ -153,6 +214,20 @@ def test_the_setup_is_recorded_where_the_other_arms_record_theirs(tmp_path):
     # to report rather than this adapter's to read.
     assert record["routing"] == PINNED
     assert record["hyperparameters"]["max_turns"] == 75
+    # The sampling this run used, and the route each value took, so a recorded
+    # result can be checked against it rather than against a file that has
+    # moved on since.
+    shared = resolve_generation_kwargs({})
+    assert {name: record["generation"][name] for name in shared} == shared
+    assert record["generation"]["source"] == "configs/generation.yaml"
+    assert set(record["generation"]["applied_via"]) == set(shared)
+    # Why a run stopped, in categories that stay apart from a timeout and from
+    # a test that failed. Zero before the agent has made a request.
+    assert record["failures"]["counts"] == {
+        "output_limit_exhausted": 0,
+        "context_exhausted": 0,
+        "request_timeout": 0,
+    }
     # Stated rather than left to be discovered: this arm's tokens are counted
     # by Harbor around LiteLLM, the others' by `model_usage.py` around the
     # OpenAI client.

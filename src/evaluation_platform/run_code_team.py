@@ -37,6 +37,7 @@ from typing import Any, Callable
 # import this module from the package, that same directory is the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from failure_categories import FailureTally  # noqa: E402
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
 from model_routing import (  # noqa: E402
     ServedProviders,
@@ -77,7 +78,8 @@ def main() -> None:
 
     config = _build_config(config_module, hyperparameters)
     usage_totals = UsageTotals()
-    llm = _build_llm(config, hyperparameters, usage_totals)
+    failures = FailureTally()
+    llm = _build_llm(config, hyperparameters, usage_totals, failures)
     context = _build_context(
         context_module,
         artifacts_module,
@@ -87,8 +89,8 @@ def main() -> None:
     )
     # Written before the workflow starts, so a run that dies in its first
     # round still says what it was, and again after it, once the servers
-    # that answered are known.
-    _record_resolved_setup(hyperparameters, config, routing, observed)
+    # that answered and the limits that were hit are known.
+    _record_resolved_setup(hyperparameters, config, routing, observed, failures)
 
     question = instruction
     if config.preprocess_requirements:
@@ -102,7 +104,9 @@ def main() -> None:
             json.dumps(usage_totals.to_dict(), indent=2),
             encoding="utf-8",
         )
-        _record_resolved_setup(hyperparameters, config, routing, observed)
+        _record_resolved_setup(
+            hyperparameters, config, routing, observed, failures
+        )
     print(f"Done. Repo at: {repo_path}")
 
 
@@ -157,6 +161,7 @@ def _build_llm(
         config: Any,
         hyperparameters: dict[str, Any],
         totals: UsageTotals,
+        failures: FailureTally | None = None,
 ) -> Any:
     """CodeTeam's own OpenAI client, instrumented rather than replaced.
 
@@ -186,6 +191,7 @@ def _build_llm(
         model=config.llm.model,
         reasoning_effort=hyperparameters.get("reasoning_effort"),
         request_extra=hyperparameters.get("request_extra"),
+        failures=failures,
     )
     return llm
 
@@ -196,14 +202,18 @@ def _instrumented_client(
         model: str,
         reasoning_effort: str | None,
         request_extra: dict[str, Any] | None,
+        failures: FailureTally | None = None,
         sleep: Callable[[float], None] = time.sleep,
 ) -> Any:
     """A stand-in for the OpenAI client that CodeTeam cannot tell apart.
 
     CodeTeam reaches the API through `client.chat.completions.create` and
-    nowhere else, so intercepting that one call is enough. Everything else is
-    forwarded to the real client untouched.
+    nowhere else, so intercepting that one call is enough — which also means
+    every role's requests are counted here, the Architects', the CTO's, the
+    Developers' and the QA agent's alike. Everything else is forwarded to the
+    real client untouched.
     """
+    failures = failures if failures is not None else FailureTally()
 
     def create(**kwargs: Any) -> Any:
         if reasoning_effort:
@@ -214,6 +224,7 @@ def _instrumented_client(
             try:
                 response = client.chat.completions.create(**kwargs)
             except Exception as error:
+                failures.record_error(error)
                 if not _is_rate_limit(error):
                     raise
                 if wait is None:
@@ -225,6 +236,12 @@ def _instrumented_client(
                 sleep(wait)
                 continue
             record_response_usage(response, totals)
+            # A truncated reply is this tool's most expensive failure: a
+            # Developer returns one whole source file per response and the QA
+            # agent returns a JSON bundle, and neither survives being cut off
+            # mid-way. That is a different finding from code that failed a test.
+            for choice in getattr(response, "choices", None) or ():
+                failures.record_finish_reason(getattr(choice, "finish_reason", None))
             return response
         raise AssertionError("unreachable")
 
@@ -320,6 +337,7 @@ def _record_resolved_setup(
         config: Any,
         routing: dict[str, Any] | None,
         observed: ServedProviders,
+        failures: FailureTally | None = None,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -339,6 +357,21 @@ def _record_resolved_setup(
                 "routing": routing,
                 "providers_served": observed.names(),
                 "hyperparameters": hyperparameters,
+                # The sampling this run used, read off the tool's own config
+                # object — the one its client was constructed from — rather
+                # than off the file that supplied it. One client serves every
+                # role, so these are the values every role sampled at.
+                "generation": {
+                    "temperature": config.llm.temperature,
+                    "top_p": config.llm.top_p,
+                    "max_tokens": config.llm.max_tokens,
+                    "source": "configs/generation.yaml",
+                    "applied_via": "core.llm_openai.OpenAILLM, shared by every role",
+                },
+                # Why a request ended where it did, in categories that stay
+                # apart from each other, from a timeout, and from a failing
+                # test.
+                "failures": (failures or FailureTally()).to_dict(),
                 "architects": config.architects,
                 "qa_rounds_allowed": config.max_rounds,
                 "rag_enabled": config.rag.enabled,

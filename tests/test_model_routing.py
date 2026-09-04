@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from evaluation_platform.experiment_config import (
+    GENERATION_CONFIG_PATH,
     ConfigurationError,
     load_experiment_config,
 )
@@ -76,6 +77,10 @@ def test_routing_is_pinned_beside_the_model_it_qualifies():
     """
     pinned = {}
     for path in sorted((ROOT / "configs").glob("*.yaml")):
+        # The sampling parameters live beside the experiment configurations and
+        # are not one: they set three values for every arm and name no model.
+        if path.name == GENERATION_CONFIG_PATH.name:
+            continue
         config = load_experiment_config(path, ENVIRONMENT)
         assert config.model_routing, f"{path.name} leaves the server to price"
         pinned[path.name] = config.model_routing

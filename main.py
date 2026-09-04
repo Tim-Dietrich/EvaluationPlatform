@@ -162,7 +162,10 @@ def resume(job_dir: Path) -> int:
     snapshot = job_dir / SNAPSHOT_FILENAME
     if snapshot.exists():
         try:
-            experiment = load_experiment_config(snapshot, os.environ)
+            # Read as an archive rather than as a configuration: it carries the
+            # sampling the job started at, and a resume continues on that rather
+            # than on whatever `configs/generation.yaml` says today.
+            experiment = load_experiment_config(snapshot, os.environ, archived=True)
         except ConfigurationError as error:
             print(f"Configuration error in {snapshot}: {error}", file=sys.stderr)
             return 2

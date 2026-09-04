@@ -12,8 +12,11 @@ from evaluation_platform.codes_agent import CodeSAgent
 from evaluation_platform.experiment_config import (
     AGENT_HYPERPARAMETERS,
     DEFAULT_CONFIG_PATH,
+    GENERATION_CONFIG_PATH,
+    GENERATION_PARAMETERS,
     ConfigurationError,
     load_experiment_config,
+    load_generation_config,
 )
 from evaluation_platform.self_collaboration_agent import SelfCollaborationAgent
 from evaluation_platform.single_shot_agent import SingleShotAgent
@@ -119,7 +122,118 @@ def test_omitted_hyperparameters_fall_back_to_recorded_defaults(tmp_path):
 
     assert config.hyperparameters["analyst_steps"] == 10
     assert config.hyperparameters["coder_steps"] == 15
-    assert config.hyperparameters["temperature"] == 0.0
+
+
+def shipped_configurations() -> list[Path]:
+    """Every experiment configuration in `configs/`, and not the sampling file.
+
+    The sampling file lives beside them and is not one of them: it sets three
+    values for every arm and names no benchmark, model or agent.
+    """
+    return sorted(
+        path
+        for path in (ROOT / "configs").glob("*.yaml")
+        if path.name != GENERATION_CONFIG_PATH.name
+    )
+
+
+def test_every_arm_samples_at_the_same_values_from_the_same_file():
+    """The invariant the sampling file exists to hold.
+
+    Temperature, top_p and the output ceiling describe the model call, not the
+    method wrapped around it. Before this file the arms disagreed on two of the
+    three — CodeTeam sampled at 0.2 where the rest sampled at 0.0, and the
+    output ceilings spanned 8192 to 32768 — and neither difference announces
+    itself in a reward figure. Every configuration now resolves to the same
+    three values, whichever solution it runs.
+    """
+    shared = load_generation_config()
+
+    resolved = {
+        path.name: load_experiment_config(path, ENVIRONMENT).generation
+        for path in shipped_configurations()
+    }
+
+    assert resolved, "no experiment configurations were found"
+    for name, generation in resolved.items():
+        assert generation.as_kwargs() == shared.as_kwargs(), name
+        assert generation.source == str(GENERATION_CONFIG_PATH), name
+
+
+def test_no_configuration_sets_sampling_of_its_own():
+    """The other half of the invariant: one place, and no second one.
+
+    A configuration that states one of the three is rejected before Docker
+    starts rather than quietly sampling its arm differently from the arms it is
+    compared with.
+    """
+    for path in shipped_configurations():
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        stated = set(document["agent"].get("hyperparameters", {})) & set(
+            GENERATION_PARAMETERS
+        )
+        assert not stated, f"{path.name} sets {', '.join(sorted(stated))}"
+
+
+@pytest.mark.parametrize("parameter", sorted(GENERATION_PARAMETERS))
+def test_a_configuration_that_states_sampling_is_told_where_it_belongs(
+        tmp_path, parameter
+):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": "evaluation_platform.single_shot_agent:SingleShotAgent",
+            "hyperparameters": {parameter: 1},
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert GENERATION_CONFIG_PATH.name in str(error.value)
+
+
+def test_no_arm_carries_a_sampling_default_of_its_own():
+    """A default is a second place to set a value, and would outlive the file."""
+    for solution in AGENT_HYPERPARAMETERS.values():
+        overlap = set(solution.types) & set(GENERATION_PARAMETERS)
+        assert not overlap, f"{solution.solution} declares {', '.join(overlap)}"
+
+
+def test_the_archived_setup_pins_the_sampling_a_resume_continues_on(tmp_path):
+    """A job resumed next week runs at the sampling its first half ran at.
+
+    The snapshot is a record of what ran, in the way the benchmark's resolved
+    digest is, so a resume reads it rather than reading whatever the central
+    file says by then. It is the one document allowed to state these values,
+    and only when it is read as an archive.
+    """
+    config = load_experiment_config(
+        ROOT / "configs" / "math-verify-single-shot.yaml", ENVIRONMENT
+    )
+    snapshot = tmp_path / "experiment-config.yaml"
+    archive_setup(config, tmp_path)
+
+    resumed = load_experiment_config(snapshot, ENVIRONMENT, archived=True)
+
+    assert resumed.generation.as_kwargs() == config.generation.as_kwargs()
+    assert resumed.generation.source == "the archived setup"
+    # Read as a configuration rather than as an archive, the same file is
+    # refused: a snapshot is not a second place to set these.
+    with pytest.raises(ConfigurationError):
+        load_experiment_config(snapshot, ENVIRONMENT)
+
+
+def test_the_sampling_a_run_used_reaches_the_agent_that_will_send_it(tmp_path):
+    """Harbor records agent kwargs in the job's `config.json`, so the values
+    are on file at the job level as well as in each trial's own record."""
+    config = load_experiment_config(write_config(tmp_path), ENVIRONMENT)
+
+    kwargs = config.to_harbor_config("job")["agents"][0]["kwargs"]
+
+    assert {name: kwargs[name] for name in GENERATION_PARAMETERS} == (
+        config.generation.as_kwargs()
+    )
 
 
 def test_agent_environment_forwards_only_the_model_backend(tmp_path):
@@ -492,8 +606,9 @@ def test_the_shipped_single_shot_configuration_resolves_to_a_complete_setup():
     assert config.agent_commit is None
     # A whole repository has to fit in one reply. Below this the arm measures
     # the token ceiling rather than the model, which is the one way a baseline
-    # can be unfair without looking it.
-    assert hyperparameters["max_tokens"] >= 16384
+    # can be unfair without looking it. It is the shared ceiling now, so the
+    # requirement is on the file that sets it rather than on this arm.
+    assert config.generation.max_tokens >= 16384
     # Reasoning is pinned rather than inherited, as in the configurations
     # beside this one.
     assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
@@ -581,7 +696,7 @@ def test_the_shipped_codes_configuration_resolves_to_a_complete_setup():
     assert "request_extra" in hyperparameters or "reasoning_effort" in hyperparameters
     # A response truncated mid-definition does not fail a test, it fails to
     # parse, and CodeS returns a whole file or a whole function per response.
-    assert hyperparameters["max_tokens"] >= 8192
+    assert config.generation.max_tokens >= 8192
     # A budget, because the tool has no bound of its own on what a task costs,
     # and unlike the other two solutions its length is chosen by the model
     # rather than by a number of rounds a configuration could lower.

@@ -59,6 +59,48 @@ belonging to a different one, or to none, is rejected with the known names
 listed rather than accepted and then ignored by an agent that has no use for
 it.
 
+Three settings are the exception and belong to no solution — see [Sampling
+parameters](#sampling-parameters) below.
+
+## Sampling parameters
+
+`configs/generation.yaml` sets `temperature`, `top_p` and `max_tokens`, once,
+for every arm:
+
+```yaml
+temperature: 0.0
+top_p: 0.95
+max_tokens: 32768
+```
+
+They are not hyperparameters of any solution. They describe the model call
+rather than the method wrapped around it, in the way `model.routing` describes
+the endpoint rather than the method, and an arm that samples differently from
+another is not a comparison of scaffolds — a difference that no reward figure
+shows. So no solution declares them, no solution defaults them, no runner
+hardcodes them, and a configuration that states one under
+`agent.hyperparameters` is rejected before Docker starts with a pointer back to
+this file.
+
+The values reach each arm the way its interface allows. The four solutions that
+run in the task container receive all three beside their own hyperparameters and
+put them in the request body. Terminus takes a `temperature` of its own and has
+no parameter for the other two, so `top_p` and `max_tokens` travel as
+`llm_kwargs`, which Harbor's LiteLLM wrapper spreads into the body of every
+request it sends. Each run records which route each value took.
+
+Every run writes the values it actually used into its `resolved-setup.json`,
+read back from the objects the requests were built from rather than from this
+file, so a recorded result can be checked against its own sampling rather than
+against whatever the file says today. A job's archived
+`experiment-config.yaml` pins them the way it pins the benchmark digest, so
+`--resume` continues a job at the sampling its first half ran at.
+
+The output ceiling is a cap rather than a target. It is set by Single-Shot,
+which has to fit an entire repository into one reply where the others spend
+their budget a file or a function at a time; the arms that answer in small
+pieces never approach it.
+
 Copy the tracked template and set `API_KEY` to your credential. The local
 `.env` file is ignored by Git:
 
@@ -442,10 +484,12 @@ run keeps the setup that produced it:
   passed to the agent.
 - `<trial>/agent/resolved-setup.json`: what actually ran in the container —
   the commit of the code generation tool, the resolved model, the
-  hyperparameters, and whether the phases that a configuration can switch off
-  were in fact on. The two baselines have no upstream commit, so they record
-  what identifies them instead: Single-Shot the digests of its prompt and its
-  runner, Terminus the Harbor release it ran from.
+  hyperparameters, the `generation` block holding the sampling the run used and
+  the route each value took, the `failures` block described below, and whether
+  the phases that a configuration can switch off were in fact on. The two
+  baselines have no upstream commit, so they record what identifies them
+  instead: Single-Shot the digests of its prompt and its runner, Terminus the
+  Harbor release it ran from.
 - `<trial>/artifacts/workspace/`: the generated workspace.
 - `<trial>/agent/`: the solution's console log, plus what it recorded about its
   own reasoning. Self-Collaboration writes `session-history.json`, the
@@ -460,6 +504,37 @@ run keeps the setup that produced it:
   repository being graded.
 - `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
   fraction of the task's reference tests that passed, consumed by Harbor.
+
+### Why a run stopped
+
+A reward figure says a run scored badly. It does not say whether the model was
+wrong, whether it was cut off mid-sentence at the output ceiling, or whether the
+provider refused the request before generating anything at all. Those are three
+findings, and reading the first where the truth was the second or third turns a
+comparison of methods into a comparison of token budgets.
+
+Every arm counts the second and third, under the same names, in the `failures`
+block of its `resolved-setup.json`:
+
+- `output_limit_exhausted` — generation began and stopped at the token cap.
+  There is a reply and it is truncated. What that costs differs by arm: a
+  Single-Shot reply is a partial repository, a CodeS sketch cut off
+  mid-definition fails to parse rather than failing a test, a CodeTeam
+  Developer's source file arrives unusable, and a Self-Collaboration Coder's
+  `edit_file` call arrives half-written.
+- `context_exhausted` — the request was refused before generation, because the
+  prompt plus the requested `max_tokens` did not fit the model's context
+  window. There is no reply at all. The remedy is a smaller prompt, where the
+  category above wants a larger ceiling, which is why they are counted apart.
+- `request_timeout` — the request was still being answered when its clock ran
+  out. Named so that a timeout cannot be filed under either of the two above.
+
+Counts rather than flags: one truncated reply among the hundreds a multi-agent
+run makes is a different finding from every reply being truncated. Every
+category is written even at zero, so a run that hit no ceiling and a run whose
+logging predates these categories do not look alike. Whether the generated code
+passes the benchmark's hidden tests is the verifier's finding, decided after the
+run has ended, and never appears here.
 
 To inspect results, stop any viewer started from an old clone and launch it
 from this repository with the current `jobs` directory:

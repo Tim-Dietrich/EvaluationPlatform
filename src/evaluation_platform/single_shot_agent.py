@@ -22,7 +22,10 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import SINGLE_SHOT
+from evaluation_platform.experiment_config import (
+    SINGLE_SHOT,
+    resolve_generation_kwargs,
+)
 from evaluation_platform.model_usage import populate_usage_context
 
 TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
@@ -56,9 +59,15 @@ class SingleShotAgent(BaseInstalledAgent):
             if name in SINGLE_SHOT.types
         }
         SINGLE_SHOT.reject_upstream_revision(kwargs, IDENTITY)
+        # The sampling parameters are set for every arm at once and arrive
+        # beside the solution's own hyperparameters. Taking them out here keeps
+        # them from reaching Harbor's constructor, which has no use for them,
+        # and merging them back in below is what puts them in front of the
+        # in-container runner under the names it already reads.
+        self.generation = resolve_generation_kwargs(kwargs)
         SINGLE_SHOT.reject_foreign(kwargs)
         super().__init__(*args, **kwargs)
-        self.hyperparameters = SINGLE_SHOT.resolve(hyperparameters)
+        self.hyperparameters = SINGLE_SHOT.resolve(hyperparameters) | self.generation
 
     @staticmethod
     def name() -> str:
@@ -69,7 +78,12 @@ class SingleShotAgent(BaseInstalledAgent):
             environment,
             command=f"python -m pip install --no-cache-dir '{OPENAI_PACKAGE}'",
         )
-        for module in ("run_single_shot.py", "model_usage.py", "model_routing.py"):
+        for module in (
+                "run_single_shot.py",
+                "model_usage.py",
+                "model_routing.py",
+                "failure_categories.py",
+        ):
             await self._upload_agent_owned_file(
                 environment,
                 Path(__file__).with_name(module),

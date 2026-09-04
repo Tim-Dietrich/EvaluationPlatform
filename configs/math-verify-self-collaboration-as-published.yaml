@@ -90,19 +90,23 @@ agent:
   repository: https://github.com/YihongDong/Self-collaboration-Code-Generation.git
   commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
   hyperparameters:
-    # Every value below is the implementation's own default:
-    # `SelfCollabSession` defaults to max_round=3, analyst_steps=10 and
-    # coder_steps=15, and its `ANALYST_CONFIG` and `CODER_CONFIG` to 8192
-    # tokens at temperature 0.0 and top_p 0.95. Nothing here is tuned.
+    # Every value below is the implementation's own default: `SelfCollabSession`
+    # defaults to max_round=3, analyst_steps=10 and coder_steps=15. Nothing here
+    # is tuned.
     max_rounds: 3
     analyst_steps: 10
     coder_steps: 15
-    max_tokens: 8192
-    temperature: 0.0
-    # Inert on this revision, as in the accommodated configuration: the tool
-    # declares `top_p` and sends it only from its non-agentic entry point, so
-    # the Analyst and the Coder sample at the provider's default.
-    top_p: 0.95
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
+
+    # The published defaults for the three are 8192 tokens at temperature 0.0
+    # and top_p 0.95, and the shared file's temperature and top_p are those. Its
+    # output ceiling is higher, which is a cap this arm does not reach: the tool
+    # returns a patch at a time, not a repository. `top_p` is inert here in any
+    # case — the tool declares it and sends it only from its non-agentic entry
+    # point, so the Analyst and the Coder sample at the provider's default.
     # Reasoning is not configured, for the same reason as in the accommodated
     # configuration: this revision sends no reasoning field on its tool-calling
     # path, and asking for one here fails the run at startup rather than being

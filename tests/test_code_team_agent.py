@@ -19,14 +19,21 @@ from evaluation_platform.code_team_agent import (
     VECTOR_RAG_PACKAGES,
     CodeTeamAgent,
 )
-from evaluation_platform.experiment_config import CODE_TEAM, ConfigurationError
+from evaluation_platform.experiment_config import (
+    CODE_TEAM,
+    ConfigurationError,
+    resolve_generation_kwargs,
+)
 from evaluation_platform.model_usage import UsageTotals
 from evaluation_platform import run_code_team
+from evaluation_platform.failure_categories import FailureTally
+from evaluation_platform.model_routing import ServedProviders
 from evaluation_platform.run_code_team import (
     _build_config,
     _build_context,
     _instrumented_client,
     _is_rate_limit,
+    _record_resolved_setup,
 )
 
 
@@ -85,6 +92,7 @@ def test_install_pins_the_revision_and_uploads_the_runner(tmp_path):
         "/installed-agent/run_code_team.py",
         "/installed-agent/model_usage.py",
         "/installed-agent/model_routing.py",
+        "/installed-agent/failure_categories.py",
     ]
 
 
@@ -158,7 +166,10 @@ def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
     assert hyperparameters["architects"] == 6
     assert hyperparameters["max_qa_rounds"] == 4
     assert hyperparameters["dynamic_developer_allocation"] is True
-    assert hyperparameters["top_p"] == 0.95
+    # The sampling every role's requests will carry, from the one file that
+    # sets it for every arm, beside the solution's own settings.
+    shared = resolve_generation_kwargs({})
+    assert {name: hyperparameters[name] for name in shared} == shared
 
 
 @pytest.mark.parametrize(
@@ -169,6 +180,10 @@ def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
         {"rag_backend": "elasticsearch"},
         # Self-Collaboration's, which CodeTeam has no role for.
         {"analyst_steps": 10},
+        # Sampling is not this solution's to state; it is set for every arm at
+        # once in `configs/generation.yaml`. Before that file, this arm was the
+        # one that sampled at 0.2 where every other sampled at 0.0.
+        {"temperature": 0.2},
     ],
 )
 def test_agent_rejects_hyperparameters_the_runner_cannot_use(tmp_path, hyperparameter):
@@ -251,9 +266,12 @@ class FakeSystemConfig:
 def build_config(monkeypatch, **hyperparameters: Any):
     monkeypatch.setenv("MODEL", "test/model")
     monkeypatch.setenv("BASE_URL", "https://openrouter.ai/api/v1")
+    # The same split the agent makes: sampling comes from the shared file (or
+    # from all three stated together), the rest is the solution's own.
+    generation = resolve_generation_kwargs(hyperparameters)
     return _build_config(
         SimpleNamespace(SystemConfig=FakeSystemConfig),
-        CODE_TEAM.resolve(hyperparameters),
+        CODE_TEAM.resolve(hyperparameters) | generation,
     )
 
 
@@ -301,7 +319,8 @@ def test_sampling_and_seeds_are_taken_from_the_configuration(monkeypatch):
     )
 
     # `temperature` has no environment override in the tool, so a run
-    # configured here would otherwise sample at the tool's own default.
+    # configured here would otherwise sample at the tool's own default — 0.2,
+    # where every other arm samples at 0.0.
     assert config.llm.temperature == 0.0
     assert config.llm.top_p == 0.9
     assert config.llm.max_tokens == 4096
@@ -404,6 +423,82 @@ def test_a_run_records_what_every_response_reported_spending():
     assert totals.reasoning_tokens == 2
     assert totals.cost_usd == 1.0
     assert totals.responses == 2
+
+
+def test_a_truncated_reply_is_counted_wherever_the_tool_reaches_the_api():
+    """CodeTeam's most expensive failure, and the one a reward cannot name.
+
+    A Developer returns one whole source file per response and the QA agent
+    returns a JSON bundle; neither survives being cut off mid-way, and neither
+    failure is the model writing wrong code. One call site serves every role,
+    so counting there covers the Architects, the CTO, the Developers and QA.
+    """
+    failures = FailureTally()
+    truncated = response()
+    truncated.choices = [SimpleNamespace(finish_reason="length")]
+    proxy = _instrumented_client(
+        FakeClient([truncated]),
+        UsageTotals(),
+        model="test/model",
+        reasoning_effort=None,
+        request_extra=None,
+        failures=failures,
+    )
+
+    proxy.chat.completions.create(messages=[])
+
+    assert failures.to_dict()["counts"]["output_limit_exhausted"] == 1
+
+
+def test_a_request_the_context_window_cannot_hold_is_counted_apart():
+    """No generation happened at all, which is not a truncated reply."""
+
+    class BadRequest(Exception):
+        status_code = 400
+
+    failures = FailureTally()
+    proxy = _instrumented_client(
+        FakeClient([BadRequest("maximum context length is 65536 tokens")]),
+        UsageTotals(),
+        model="test/model",
+        reasoning_effort=None,
+        request_extra=None,
+        failures=failures,
+    )
+
+    with pytest.raises(BadRequest):
+        proxy.chat.completions.create(messages=[])
+
+    counts = failures.to_dict()["counts"]
+    assert counts["context_exhausted"] == 1
+    assert counts["output_limit_exhausted"] == 0
+    assert counts["request_timeout"] == 0
+
+
+def test_the_run_records_the_sampling_every_role_shared(tmp_path, monkeypatch):
+    """Read off the tool's own config object, which its one client was built
+    from, so the record is of what every role sampled at rather than of what a
+    file said."""
+    monkeypatch.setattr(
+        run_code_team, "RESOLVED_SETUP_PATH", tmp_path / "resolved-setup.json"
+    )
+    monkeypatch.setattr(run_code_team, "CODE_TEAM_ROOT", tmp_path)
+    config = build_config(monkeypatch, temperature=0.0, top_p=0.9, max_tokens=4096)
+
+    _record_resolved_setup({}, config, None, ServedProviders())
+
+    recorded = json.loads(
+        (tmp_path / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["generation"]["temperature"] == 0.0
+    assert recorded["generation"]["top_p"] == 0.9
+    assert recorded["generation"]["max_tokens"] == 4096
+    assert recorded["generation"]["source"] == "configs/generation.yaml"
+    assert recorded["failures"]["counts"] == {
+        "output_limit_exhausted": 0,
+        "context_exhausted": 0,
+        "request_timeout": 0,
+    }
 
 
 def test_a_throttled_request_is_waited_out_rather_than_losing_the_trial():

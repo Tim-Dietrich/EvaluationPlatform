@@ -9,14 +9,20 @@ import pytest
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import SINGLE_SHOT, ConfigurationError
+from evaluation_platform.experiment_config import (
+    SINGLE_SHOT,
+    ConfigurationError,
+    resolve_generation_kwargs,
+)
 from evaluation_platform.model_routing import ServedProviders
+from evaluation_platform.failure_categories import FailureTally
 from evaluation_platform.model_usage import UsageTotals
 from evaluation_platform import run_single_shot
 from evaluation_platform.run_single_shot import (
     FORMAT_INSTRUCTION,
     _client,
     _common_root,
+    _record_resolved_setup,
     _request,
     _strip_workspace_root,
     _write_files,
@@ -100,10 +106,13 @@ def response(content="### FILE: a.py\n```python\nx = 1\n```", finish_reason="sto
 
 def requester(
         responses, totals=None, waits=None, routing=None, observed=None,
-        **hyperparameters,
+        failures=None, **hyperparameters,
 ):
     client = FakeClient(responses)
-    resolved = SINGLE_SHOT.resolve(hyperparameters)
+    # The same split the agent makes: sampling comes from the shared file (or
+    # from all three stated together), the rest is the solution's own.
+    generation = resolve_generation_kwargs(hyperparameters)
+    resolved = SINGLE_SHOT.resolve(hyperparameters) | generation
 
     def send():
         return _request(
@@ -114,10 +123,99 @@ def requester(
             model="test/model",
             routing=routing,
             observed=observed,
+            failures=failures,
             sleep=(waits if waits is not None else []).append,
         )
 
     return client, send
+
+
+def test_the_sampling_a_run_used_is_written_into_its_own_record(tmp_path, monkeypatch):
+    """What was actually sent, recorded next to the result it produced.
+
+    Read back out of the values the request was built from rather than off the
+    file that supplied them, so a run months old can be checked against its own
+    sampling rather than against whatever that file says today.
+    """
+    monkeypatch.setattr(
+        run_single_shot, "RESOLVED_SETUP_PATH", tmp_path / "resolved-setup.json"
+    )
+    hyperparameters = resolve_generation_kwargs({}) | SINGLE_SHOT.resolve({})
+
+    _record_resolved_setup(
+        hyperparameters=hyperparameters,
+        finish_reason="stop",
+        written=["pyproject.toml"],
+        warnings=[],
+        requests=1,
+    )
+
+    recorded = json.loads(
+        (tmp_path / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    shared = resolve_generation_kwargs({})
+    assert {name: recorded["generation"][name] for name in shared} == shared
+    assert recorded["generation"]["source"] == "configs/generation.yaml"
+
+
+def test_a_reply_cut_off_at_the_ceiling_is_counted_as_its_own_failure(
+        tmp_path, monkeypatch
+):
+    """The finding a reward figure cannot carry.
+
+    A baseline that ran out of output tokens and one that did not know the
+    answer both score badly. `truncated` says which for this one reply; the
+    category says it in the same words every other arm uses.
+    """
+    monkeypatch.setattr(
+        run_single_shot, "RESOLVED_SETUP_PATH", tmp_path / "resolved-setup.json"
+    )
+    failures = FailureTally()
+    _, send = requester([response(finish_reason="length")], failures=failures)
+
+    send()
+    _record_resolved_setup(
+        hyperparameters=resolve_generation_kwargs({}) | SINGLE_SHOT.resolve({}),
+        finish_reason="length",
+        written=[],
+        warnings=[],
+        requests=1,
+        failures=failures,
+    )
+
+    recorded = json.loads(
+        (tmp_path / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["truncated"] is True
+    assert recorded["failures"]["counts"]["output_limit_exhausted"] == 1
+    # Kept apart from the two it is most often confused with.
+    assert recorded["failures"]["counts"]["context_exhausted"] == 0
+    assert recorded["failures"]["counts"]["request_timeout"] == 0
+
+
+def test_a_prompt_the_context_window_cannot_hold_is_counted_apart(tmp_path):
+    """Prompt plus ceiling overflowed the window, so nothing was generated.
+
+    A different finding from a truncated reply, and from a provider that was
+    slow: the remedy is a smaller prompt rather than a larger ceiling.
+    """
+    failures = FailureTally()
+    refusal = BadRequest("This model's maximum context length is 65536 tokens")
+    _, send = requester([refusal, refusal, refusal], failures=failures)
+
+    with pytest.raises(RuntimeError):
+        send()
+
+    assert failures.to_dict()["counts"]["context_exhausted"] == 3
+    assert failures.to_dict()["counts"]["output_limit_exhausted"] == 0
+
+
+class BadRequest(Exception):
+    """An OpenAI-style 400, carrying the provider's payload the way one does."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.status_code = 400
 
 
 def test_install_uploads_the_runner_and_pins_the_client(tmp_path):
@@ -134,6 +232,7 @@ def test_install_uploads_the_runner_and_pins_the_client(tmp_path):
         "/installed-agent/run_single_shot.py",
         "/installed-agent/model_usage.py",
         "/installed-agent/model_routing.py",
+        "/installed-agent/failure_categories.py",
     }
 
 
@@ -161,7 +260,9 @@ def test_run_uploads_instruction_instead_of_putting_it_on_the_command_line(tmp_p
 
 def test_the_configured_hyperparameters_reach_the_container(tmp_path):
     environment = RecordingEnvironment()
-    agent = SingleShotAgent(logs_dir=tmp_path, max_tokens=16384, temperature=0.3)
+    agent = SingleShotAgent(
+        logs_dir=tmp_path, max_tokens=16384, temperature=0.3, top_p=0.9
+    )
 
     asyncio.run(
         agent.run(
@@ -172,12 +273,44 @@ def test_the_configured_hyperparameters_reach_the_container(tmp_path):
     )
 
     hyperparameters = json.loads(uploaded(environment)[HYPERPARAMETERS_PATH])
+    # The sampling the run resolved to, whichever of the two places it came
+    # from, arrives beside the solution's own settings under the names the
+    # runner reads.
     assert hyperparameters["max_tokens"] == 16384
     assert hyperparameters["temperature"] == 0.3
+    assert hyperparameters["top_p"] == 0.9
     # Defaults are filled in, so what the container receives is the whole
     # setup rather than only the part that was written down.
-    assert hyperparameters["top_p"] == 0.95
     assert hyperparameters["request_attempts"] == 3
+
+
+def test_sampling_left_unstated_comes_from_the_one_file_that_states_it(tmp_path):
+    """An agent built without sampling reads the file every arm reads.
+
+    The three values are not this baseline's to default. There is one place
+    they are written down, and an agent that was handed none of them goes
+    there rather than inventing figures of its own.
+    """
+    environment = RecordingEnvironment()
+    agent = SingleShotAgent(logs_dir=tmp_path)
+
+    asyncio.run(
+        agent.run(
+            "write it",
+            cast(BaseEnvironment, cast(object, environment)),
+            AgentContext(),
+        )
+    )
+
+    hyperparameters = json.loads(uploaded(environment)[HYPERPARAMETERS_PATH])
+    shared = resolve_generation_kwargs({})
+    assert {name: hyperparameters[name] for name in shared} == shared
+
+
+def test_some_but_not_all_of_the_sampling_parameters_is_refused(tmp_path):
+    """They travel together, or a run samples at a value nobody chose."""
+    with pytest.raises(ConfigurationError):
+        SingleShotAgent(logs_dir=tmp_path, temperature=0.3)
 
 
 @pytest.mark.parametrize(
@@ -187,7 +320,7 @@ def test_the_configured_hyperparameters_reach_the_container(tmp_path):
         {"commit": "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"},
         # Self-Collaboration's, which this baseline has no phase for.
         {"analyst_steps": 10},
-        {"max_tokens": 0},
+        {"max_tokens": 0, "temperature": 0.0, "top_p": 0.95},
     ],
 )
 def test_the_baseline_rejects_settings_that_would_decide_nothing(tmp_path, setting):
@@ -491,7 +624,9 @@ def test_the_wait_is_narrated_so_an_empty_log_is_not_a_silent_stall(capsys):
     Without a line before the request the log stays empty for the whole of it,
     which reads exactly like a run that is stuck.
     """
-    _, send = requester([response()], max_tokens=32768)
+    _, send = requester(
+        [response()], max_tokens=32768, temperature=0.0, top_p=0.95
+    )
 
     send()
 

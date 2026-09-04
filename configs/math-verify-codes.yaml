@@ -105,27 +105,19 @@ agent:
     # What a configuration states about CodeS is accordingly how a request is
     # made, how many are in flight, and when to stop.
 
-    # Requests. Five attempts, the first at `temperature` and the rest at
-    # `retry_temperature`, are the tool's own figures, hardcoded in its driver
-    # and written out here so they are part of the record and can be varied.
-    # `temperature: 0.0` is the tool's own first-attempt setting, and it
-    # happens to match the Self-Collaboration configuration beside it, so
-    # those two runs differ in method and not in sampling.
+    # Requests. Five attempts are the tool's own figure, hardcoded in its
+    # driver and written out here so it is part of the record and can be
+    # varied. The first attempt uses the run's shared temperature and the rest
+    # use `retry_temperature`, which stays a hyperparameter because it is not a
+    # setting the other arms have: it is what this tool does with a request the
+    # provider refused, rather than how the comparison samples.
     request_attempts: 5
-    temperature: 0.0
     retry_temperature: 0.1
 
-    # `top_p` and `max_tokens` are absent from the request the tool builds, so
-    # omitting them here reproduces it exactly and lets the provider decide
-    # both. Both are set instead, for the two reasons the other configurations
-    # give: `top_p` because sampling that is not pinned is not part of the
-    # record, and `max_tokens` because of how CodeS writes code. FileSketcher
-    # returns a whole file of signatures in one response and SketchFiller
-    # returns a whole function, and a response truncated mid-definition does
-    # not fail a test — it fails to parse, and the file it belonged to is
-    # written as an unfilled sketch instead.
-    max_tokens: 16000
-    top_p: 0.95
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
 
     # Reasoning, pinned rather than inherited, exactly as in the two
     # configurations beside this one. CodeS sends no reasoning setting of its

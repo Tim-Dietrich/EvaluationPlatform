@@ -21,6 +21,7 @@ from evaluation_platform.self_collaboration_agent import (
     SelfCollaborationAgent,
 )
 from evaluation_platform import run_self_collaboration
+from evaluation_platform.failure_categories import FailureTally
 from evaluation_platform.model_usage import UsageTotals, record_response_usage
 from evaluation_platform.run_self_collaboration import (
     _initialize_repository,
@@ -283,6 +284,91 @@ def test_runner_records_whether_reasoning_was_requested(tmp_path, monkeypatch):
     )
     assert recorded["reasoning_requested"] is True
     assert recorded["hyperparameters"]["reasoning_effort"] == "high"
+
+
+def test_runner_records_the_sampling_every_role_actually_used(tmp_path, monkeypatch):
+    """Read off the config object the tool's own requests were built from.
+
+    One `ModelConfig` serves the Analyst, the Coder and the Tester alike, so
+    these are the values every role sampled at. `top_p` is recorded as inert
+    because this revision declares it and sends it only from its non-agentic
+    entry point — the record says what was resolved and what that was worth.
+    """
+    _, logs = run_runner(
+        monkeypatch,
+        tmp_path,
+        {
+            "max_rounds": 1,
+            "analyst_steps": 10,
+            "coder_steps": 15,
+            "max_tokens": 4096,
+            "temperature": 0.2,
+            "top_p": 0.9,
+        },
+    )
+
+    recorded = json.loads(
+        (logs / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["generation"]["temperature"] == 0.2
+    assert recorded["generation"]["top_p"] == 0.9
+    assert recorded["generation"]["max_tokens"] == 4096
+    assert recorded["generation"]["source"] == "configs/generation.yaml"
+    assert recorded["generation"]["inert_on_this_revision"] == ["top_p"]
+
+
+def test_runner_records_the_failure_categories_separately_from_a_reward(
+        tmp_path, monkeypatch
+):
+    """Every category, at zero, on a run that hit none of them.
+
+    A run that reached no ceiling and a run whose logging predates these
+    categories must not look alike in the record, so all three are written.
+    """
+    _, logs = run_runner(
+        monkeypatch,
+        tmp_path,
+        {
+            "max_rounds": 1,
+            "analyst_steps": 10,
+            "coder_steps": 15,
+            "max_tokens": 8192,
+            "temperature": 0.0,
+            "top_p": 0.95,
+        },
+    )
+
+    recorded = json.loads(
+        (logs / "resolved-setup.json").read_text(encoding="utf-8")
+    )
+    assert recorded["failures"]["counts"] == {
+        "output_limit_exhausted": 0,
+        "context_exhausted": 0,
+        "request_timeout": 0,
+    }
+    assert "functional test" in recorded["failures"]["excludes"]
+
+
+def test_a_truncated_role_reply_is_counted_wherever_the_tool_calls_the_model():
+    """The tool has one call site for every role, so wrapping it covers them all.
+
+    A Coder whose `edit_file` call arrives half-written is not a Coder that made
+    a wrong edit, and only this tells them apart.
+    """
+    failures = FailureTally()
+    call = _usage_recording_call(
+        lambda *args, **kwargs: SimpleNamespace(
+            usage=None,
+            choices=[SimpleNamespace(finish_reason="length")],
+        ),
+        UsageTotals(),
+        failures=failures,
+        sleep=lambda seconds: None,
+    )
+
+    call([], SimpleNamespace())
+
+    assert failures.to_dict()["counts"]["output_limit_exhausted"] == 1
 
 
 def test_runner_records_the_setup_that_actually_ran(tmp_path, monkeypatch):

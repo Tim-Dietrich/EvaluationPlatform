@@ -120,13 +120,17 @@ agent:
     max_rounds: 3
     analyst_steps: 10
     coder_steps: 15
-    max_tokens: 8192
-    temperature: 0.0
-    # Recorded, but inert on this revision: the tool declares `top_p` and sends
-    # it only from its non-agentic entry point, so the Analyst and the Coder
-    # sample at the provider's default. The value here is the tool's own
-    # default, so the record states an intent it does not misrepresent.
-    top_p: 0.95
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
+
+    # One note that the shared file cannot carry, because it is about this
+    # revision rather than about the comparison: `top_p` is inert here. The tool
+    # declares it and sends it only from its non-agentic entry point, so the
+    # Analyst and the Coder sample at the provider's default for it whatever the
+    # shared file says. The run's `resolved-setup.json` records the value that
+    # was resolved, as every arm's does.
     # Reasoning is deliberately not configured. The revision under evaluation
     # sends no reasoning field on its tool-calling path, so how much the model
     # reasons is the provider's default for it at that moment: set outside the

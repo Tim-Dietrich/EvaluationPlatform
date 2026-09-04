@@ -12,6 +12,7 @@ from typing import Any, Callable
 # import this module from the package, that same directory is the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from failure_categories import FailureTally  # noqa: E402
 from model_usage import UsageTotals, record_response_usage  # noqa: E402
 from model_routing import (  # noqa: E402
     ServedProviders,
@@ -63,16 +64,20 @@ def main() -> None:
     model_config = config_module.ModelConfig(
         **_model_settings(hyperparameters)
     )
+    failures = FailureTally()
     # Written before the session starts, so a run that dies in its first
     # round still says what it was, and again after it, once the servers
-    # that answered are known.
-    _record_resolved_setup(hyperparameters, model_config, routing, observed)
+    # that answered and the limits that were hit are known.
+    _record_resolved_setup(
+        hyperparameters, model_config, routing, observed, failures
+    )
 
     usage_totals = UsageTotals()
     agent_module.call_llm_with_tools = _usage_recording_call(
         agent_module.call_llm_with_tools,
         usage_totals,
         model=model_config.model,
+        failures=failures,
     )
 
     _initialize_repository()
@@ -105,7 +110,9 @@ def main() -> None:
             json.dumps(usage_totals.to_dict(), indent=2),
             encoding="utf-8",
         )
-        _record_resolved_setup(hyperparameters, model_config, routing, observed)
+        _record_resolved_setup(
+            hyperparameters, model_config, routing, observed, failures
+        )
     HISTORY_PATH.write_text(
         json.dumps(
             {
@@ -123,15 +130,27 @@ def _usage_recording_call(
         call: Callable[..., Any],
         totals: UsageTotals,
         model: str = "unknown",
+        failures: FailureTally | None = None,
         sleep: Callable[[float], None] = time.sleep,
 ) -> Callable[..., Any]:
+    """The tool's own model call, with what it spent and how it failed counted.
+
+    The tool has one call site for its Analyst, its Coder and its Tester alike,
+    so wrapping it once covers every role. Neither the retrying below nor the
+    tool's own is changed by the counting: a classified failure is counted and
+    then handled exactly as it was before.
+    """
+    failures = failures if failures is not None else FailureTally()
+
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
             try:
                 response = call(*args, **kwargs)
                 record_response_usage(response, totals)
+                _record_finish_reasons(response, failures)
                 return response
             except RuntimeError as error:
+                failures.record_error(error)
                 if str(error) != "Failed to call LLM API with tools":
                     raise
                 if attempt == 2:
@@ -141,10 +160,25 @@ def _usage_recording_call(
                         "capacity."
                     ) from error
                 sleep(15 * (attempt + 1))
+            except Exception as error:  # noqa: BLE001 - counted, then re-raised.
+                failures.record_error(error)
+                raise
 
         raise AssertionError("unreachable")
 
     return wrapped
+
+
+def _record_finish_reasons(response: Any, failures: FailureTally) -> None:
+    """Count a reply that stopped at the output ceiling rather than finishing.
+
+    A truncated tool call is the shape this takes here: the Coder's `edit_file`
+    arrives half-written, the tool cannot parse it, and the round is spent. That
+    is a different finding from a Coder that made a wrong edit, and only this
+    tells them apart.
+    """
+    for choice in getattr(response, "choices", None) or ():
+        failures.record_finish_reason(getattr(choice, "finish_reason", None))
 
 
 def _read_instruction() -> str:
@@ -187,6 +221,7 @@ def _record_resolved_setup(
         model_config: Any,
         routing: dict[str, Any] | None,
         observed: ServedProviders,
+        failures: FailureTally | None = None,
 ) -> None:
     """Record what actually ran, next to the run's other logs.
 
@@ -205,6 +240,23 @@ def _record_resolved_setup(
                 "routing": routing,
                 "providers_served": observed.names(),
                 "hyperparameters": hyperparameters,
+                # The sampling this run used, read off the config object the
+                # tool's own requests were built from rather than off the file
+                # that supplied it. `top_p` is stated as inert because this
+                # revision declares it and sends it only from its non-agentic
+                # entry point: the Analyst and the Coder sample at the
+                # provider's default for it whatever was configured.
+                "generation": {
+                    "temperature": model_config.temperature,
+                    "top_p": model_config.top_p,
+                    "max_tokens": model_config.max_tokens,
+                    "source": "configs/generation.yaml",
+                    "applied_via": "core.config.ModelConfig, one per role",
+                    "inert_on_this_revision": ["top_p"],
+                },
+                # Why a round ended where it did, in categories that stay apart
+                # from each other, from a timeout, and from a failing test.
+                "failures": (failures or FailureTally()).to_dict(),
                 "tester_enabled": bool(hyperparameters.get("test_command")),
                 "reasoning_requested": bool(
                     hyperparameters.get("reasoning_effort")
