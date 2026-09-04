@@ -1,0 +1,82 @@
+@startuml evaluation-platform-architecture
+'=============================================================================
+' Architecture of the evaluation platform.
+'
+' Scope: the apparatus, not any one experiment. The two things a study varies
+' -- the benchmark and the code generation solution -- are deliberately left
+' unnamed. Each enters through a declared interface, so the figure stays true
+' whichever benchmark is graded and whichever solution is measured.
+'
+' Read the numbered edges in order: they are the life of a single run, from
+' the configuration that declares it to the record that survives it. The
+' orchestrator appears twice, once for each of its two roles, so that the run
+' reads top to bottom rather than doubling back on itself.
+'
+' Render:  java -jar plantuml.jar -tsvg docs/architecture.puml
+'=============================================================================
+
+' The surrounding document supplies the caption; uncomment for standalone use.
+' title Evaluation Platform -- Architecture
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam componentStyle rectangle
+skinparam linetype ortho
+skinparam ArrowColor #4A5158
+skinparam ArrowFontColor #4A5158
+skinparam ArrowFontSize 11
+skinparam nodesep 30
+skinparam ranksep 50
+
+skinparam package {
+  FontSize 13
+  FontStyle bold
+  FontColor #2B3138
+  BackgroundColor #FFFFFF
+  BorderColor #9AA2AA
+}
+skinparam component {
+  FontColor #23282D
+  FontSize 12
+}
+skinparam folder {
+  BackgroundColor #F6F7F9
+  BorderColor #7E868F
+  FontColor #23282D
+}
+skinparam database {
+  FontColor #23282D
+}
+skinparam cloud {
+  BackgroundColor #FFFFFF
+  BorderColor #7E868F
+  FontColor #23282D
+}
+skinparam note {
+  BackgroundColor #FFFCF0
+  BorderColor #C6B98C
+  FontColor #4A4232
+  FontSize 11
+}
+
+'-- Colour carries one distinction only: who owns a part of the apparatus. ----
+!$PLATFORM = "#back:E7EFF9;line:3C6E9F"
+!$INFRA    = "#back:EDEFF1;line:7E868F"
+!$SUBJECT  = "#back:FAEBD0;line:B5822E"
+
+package "Experiment Definition" {
+    component "Konfiguration" as CONFIG $PLATFORM
+}
+
+'================================================================== legend ===
+legend bottom
+  |<#E7EFF9> Built here: the evaluation platform |
+  |<#EDEFF1> Adopted orchestration infrastructure |
+  |<#FAEBD0> Interchangeable subject of a study: the solution and the benchmark |
+  |<#FFFFFF> External service |
+endlegend
+
+@enduml
