@@ -1,0 +1,114 @@
+diff --git a/orchestrator/workflow_async.py b/orchestrator/workflow_async.py
+index 3c218f7..654095a 100644
+--- a/orchestrator/workflow_async.py
++++ b/orchestrator/workflow_async.py
+@@ -118,15 +118,32 @@ class MultiAgentCodegenWorkflowAsync:
+         with StageTimer(self.log, "qa_init_tests"):
+             await qa.init_tests(chosen_sds)
+ 
+-        sds_map: Dict[str, dict] = {fs.path: {
+-            "path": fs.path,
+-            "responsibilities": fs.responsibilities,
+-            "interfaces": {
+-                "functions": [f.__dict__ for f in fs.interfaces["functions"]],
+-                "classes": [c.__dict__ for c in fs.interfaces["classes"]],
+-            },
+-            "dependencies": fs.dependencies
+-        } for fs in sds.file_specs}
++        # Keep recursive dict conversion for sds_map, as the synchronous
++        # workflow already does. `__dict__` is shallow, so a ClassBrief's
++        # `methods` would stay a list of FuncBrief objects, and the developer
++        # prompt subscripts those (`m['signature']`) — every file whose spec
++        # declares a class method would end the run before it wrote a line.
++        sds_map: Dict[str, dict] = {}
++        for fs in sds.file_specs:
++            func_dicts = [getattr(f, "__dict__", f) for f in fs.interfaces["functions"]]
++            class_dicts = []
++            for c in fs.interfaces["classes"]:
++                c_dict = getattr(c, "__dict__", c)
++                methods = c_dict.get("methods", []) if isinstance(c_dict, dict) else getattr(c, "methods", [])
++                methods_dicts = [getattr(m, "__dict__", m) for m in methods]
++                c_copy = dict(c_dict) if isinstance(c_dict, dict) else dict(c.__dict__)
++                c_copy["methods"] = methods_dicts
++                class_dicts.append(c_copy)
++
++            sds_map[fs.path] = {
++                "path": fs.path,
++                "responsibilities": fs.responsibilities,
++                "interfaces": {
++                    "functions": func_dicts,
++                    "classes": class_dicts,
++                },
++                "dependencies": fs.dependencies
++            }
+ 
+         dev_tasks = []
+         for a in sds.dev_plan:
+diff --git a/runtime_adapters/python_runtime.py b/runtime_adapters/python_runtime.py
+index c0c814f..b220cac 100644
+--- a/runtime_adapters/python_runtime.py
++++ b/runtime_adapters/python_runtime.py
+@@ -11,6 +11,14 @@ from typing import Dict, Any, List
+ from runtime_adapters.pytest_fallback import run_pytest_style_tests
+ 
+ 
++# pytest names the failing source file only on its location lines, which read
++# `path/to/file.py:LINENO:`; the short summary names the test file instead. The
++# filter below kept neither shape, so every failure reached the router carrying
++# no source path, could not be attributed to the developer who owns the file,
++# and was dropped as unroutable before any repair round could be scheduled.
++_FAILURE_LOCATION = re.compile(r"^[A-Za-z0-9_./\\-]+\.py:\d+:")
++
++
+ class PythonRuntime:
+     def _can_run_pytest(self) -> bool:
+         return shutil.which("pytest") is not None or importlib.util.find_spec("pytest") is not None
+@@ -52,7 +60,13 @@ class PythonRuntime:
+     def _parse_failures(self, text: str) -> List[Dict[str, str]]:
+         buf = []
+         for line in text.splitlines():
+-            if line.startswith("E   ") or "FAILED" in line or "ERROR at" in line or line.startswith("Traceback"):
++            if (
++                line.startswith("E   ")
++                or "FAILED" in line
++                or "ERROR at" in line
++                or line.startswith("Traceback")
++                or _FAILURE_LOCATION.match(line)
++            ):
+                 buf.append(line)
+         stack = "\n".join(buf)
+         if not stack:
+diff --git a/runtime_adapters/python_runtime_async.py b/runtime_adapters/python_runtime_async.py
+index 6448e32..ba4ec5f 100644
+--- a/runtime_adapters/python_runtime_async.py
++++ b/runtime_adapters/python_runtime_async.py
+@@ -11,6 +11,14 @@ from pathlib import Path
+ from runtime_adapters.pytest_fallback import run_pytest_style_tests
+ 
+ 
++# pytest names the failing source file only on its location lines, which read
++# `path/to/file.py:LINENO:`; the short summary names the test file instead. The
++# filter below kept neither shape, so every failure reached the router carrying
++# no source path, could not be attributed to the developer who owns the file,
++# and was dropped as unroutable before any repair round could be scheduled.
++_FAILURE_LOCATION = re.compile(r"^[A-Za-z0-9_./\\-]+\.py:\d+:")
++
++
+ class PythonRuntimeAsync:
+     def _can_run_pytest(self) -> bool:
+         return shutil.which("pytest") is not None or importlib.util.find_spec("pytest") is not None
+@@ -55,7 +63,13 @@ class PythonRuntimeAsync:
+     def _parse_failures(self, text: str) -> List[Dict[str, str]]:
+         buf = []
+         for ln in text.splitlines():
+-            if ln.startswith("E   ") or "FAILED" in ln or "ERROR at" in ln or ln.startswith("Traceback"):
++            if (
++                ln.startswith("E   ")
++                or "FAILED" in ln
++                or "ERROR at" in ln
++                or ln.startswith("Traceback")
++                or _FAILURE_LOCATION.match(ln)
++            ):
+                 buf.append(ln)
+         stack = "\n".join(buf)
+         if not stack:
