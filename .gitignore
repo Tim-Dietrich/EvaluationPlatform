@@ -84,3 +84,9 @@ $RECYCLE.BIN/
 # digest-pinned data in benchmarks/humaneval/data. Generated, not source:
 # regenerate it rather than editing or committing it.
 benchmarks/humaneval/tasks/
+
+# SketchEval is not published as a dataset anywhere: it lives inside the CodeS
+# repository, and scripts/build_sketcheval_tasks.py generates its 19 task
+# packages from the digest-pinned commit in benchmarks/sketcheval/data.
+# Generated, not source: regenerate it rather than editing or committing it.
+benchmarks/sketcheval/tasks/

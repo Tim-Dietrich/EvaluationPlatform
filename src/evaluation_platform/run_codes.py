@@ -102,7 +102,7 @@ def main() -> None:
     failures = FailureTally()
     budget = _Budget(hyperparameters, totals)
     request = _requester(
-        _client(),
+        _client(hyperparameters["request_timeout_seconds"]),
         hyperparameters,
         totals,
         budget,
@@ -261,7 +261,7 @@ def _requester(
     failures = failures if failures is not None else FailureTally()
     lock = threading.Lock()
 
-    def send(instruction: str, temperature: float) -> Any:
+    def send(prompt: dict[str, Any], temperature: float) -> Any:
         body: dict[str, Any] = {
             "model": model,
             "temperature": temperature,
@@ -270,7 +270,7 @@ def _requester(
             # between token budgets as much as between methods.
             "max_tokens": hyperparameters["max_tokens"],
             "top_p": hyperparameters["top_p"],
-            "messages": [{"role": "user", "content": instruction}],
+            "messages": [{"role": "user", "content": prompt["instruction"]}],
         }
         if hyperparameters.get("reasoning_effort"):
             body["reasoning_effort"] = hyperparameters["reasoning_effort"]
@@ -278,6 +278,12 @@ def _requester(
             body["extra_body"] = dict(hyperparameters["request_extra"])
         response = client.chat.completions.create(**body)
         choice = response.choices[0]
+        # Kept on the prompt as well as counted, because the tally says how
+        # many replies ran into the ceiling and this says which. A file sketch
+        # is the reply that decides how many third-phase requests its file
+        # costs, so which sketch was cut off is the difference between a design
+        # and a fan-out nobody chose.
+        prompt["finish_reason"] = getattr(choice, "finish_reason", None)
         with lock:
             record_response_usage(response, totals)
             # A file sketch or a function body cut off at the ceiling does not
@@ -294,14 +300,21 @@ def _requester(
         return content
 
     def request(prompt: dict[str, Any]) -> str:
-        budget.check()
         failure: Exception | None = None
         for attempt in range(attempts):
+            # Before each attempt rather than once per prompt. A prompt costs
+            # `attempts * request_timeout_seconds` in the worst case, and a
+            # budget consulted only on the way in cannot end a run until every
+            # one of those attempts has been paid for — which is how a run
+            # reaches Harbor's timeout, and a SIGKILL, with a budget it spent
+            # long before. Raised from outside the `try` below so that it ends
+            # the run rather than being counted as a refused attempt.
+            budget.check()
             if failure is not None and _is_rate_limit(failure):
                 sleep(RATE_LIMIT_WAITS[min(attempt - 1, len(RATE_LIMIT_WAITS) - 1)])
             try:
                 return send(
-                    prompt["instruction"],
+                    prompt,
                     hyperparameters["temperature"]
                     if attempt == 0
                     else hyperparameters["retry_temperature"],
@@ -553,12 +566,20 @@ def _read_templates(source: str) -> dict[str, str]:
     )
 
 
-def _client() -> Any:
+def _client(timeout_seconds: int) -> Any:
     """The OpenAI-compatible client, pointed at the configured endpoint.
 
     The credential is read indirectly, through the name the experiment
     configuration chose for it, so a configuration decides what the variable is
     called rather than the tool.
+
+    The timeout and `max_retries` below are what keep one request from becoming
+    the whole trial. Left at its defaults the client waits ten minutes on every
+    read and retries twice on its own beneath the attempts in `_requester`, so
+    a single stalled reply costs `request_attempts * 3 * 600` seconds — two and
+    a half hours for one file sketch, against a task allowed one. `max_retries=0`
+    leaves the retrying to `_requester`, which is the half that is configured
+    and recorded; the timeout is what the aggregator's silence costs.
     """
     from openai import OpenAI
 
@@ -566,6 +587,8 @@ def _client() -> Any:
     return OpenAI(
         base_url=os.environ.get("BASE_URL"),
         api_key=os.environ.get(api_key_env),
+        timeout=float(timeout_seconds),
+        max_retries=0,
     )
 
 
@@ -733,15 +756,91 @@ def _record_resolved_setup(
                 ),
                 **(outcome or {"files_written": None}),
                 "concurrent_requests": hyperparameters["concurrent_requests"],
-                "reasoning_requested": bool(
-                    hyperparameters.get("reasoning_effort")
-                    or hyperparameters.get("request_extra")
-                ),
+                "reasoning_requested": _reasoning_requested(hyperparameters),
+                # Which file cost what, and whether its sketch was intact.
+                "files": _per_file(records),
             },
             indent=2,
         ),
         encoding="utf-8",
     )
+
+
+def _per_file(records: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """What each file the repository sketch named cost, and what it was.
+
+    The totals above say how many files were sketched and how many functions
+    they declared between them. They do not say that one file declared a
+    quarter of those functions, or that its sketch was not a design at all but
+    a reply that ran off the output ceiling mid-definition — and the second is
+    what explains the first.
+
+    `sketch_parses` is the one to read. CodeS answers a sketch it cannot parse
+    by dropping lines from the end until it can, so a truncated reply never
+    fails: it silently becomes a shorter design, and every function still
+    standing in it is then paid for at the price of a third-phase request.
+    """
+    requested: dict[str, int] = {}
+    answered: dict[str, int] = {}
+    for record in records[FUNCTION_BODY]:
+        path = record.get("current_file_path", "")
+        requested[path] = requested.get(path, 0) + 1
+        answered[path] = answered.get(path, 0) + ("generated" in record)
+
+    files = [
+        {
+            "file_path": record.get("file_path", ""),
+            "sketch_answered": "parsed" in record,
+            "sketch_chars": len(record["parsed"]) if "parsed" in record else None,
+            "sketch_parses": _parses(record.get("parsed")),
+            "sketch_finish_reason": record.get("finish_reason"),
+            "functions_requested": requested.get(record.get("file_path", ""), 0),
+            "functions_answered": answered.get(record.get("file_path", ""), 0),
+        }
+        for record in records[FILE_SKETCH]
+    ]
+    # Widest first: the file that set the size of the run is the one to read.
+    files.sort(key=lambda each: -each["functions_requested"])
+    return files
+
+
+def _parses(sketch: str | None) -> bool | None:
+    """Whether a generated file sketch is the Python it claims to be.
+
+    Anything the parser refuses counts as not parsing, whatever it raised. This
+    runs while a finished run is writing its record, where being exact about
+    which way a sketch was malformed is worth less than the record surviving.
+    """
+    if sketch is None:
+        return None
+    try:
+        ast.parse(sketch)
+    except Exception:  # noqa: BLE001 - see above.
+        return False
+    return True
+
+
+def _reasoning_requested(hyperparameters: dict[str, Any]) -> bool:
+    """Whether the run asked the model to reason.
+
+    Not whether it said anything about reasoning, which is what a truthy test
+    on `request_extra` answers. The shape this platform uses to turn reasoning
+    *off* is `{"reasoning": {"enabled": false}}` — a non-empty dict like any
+    other, and read as truthy it records every arm that disabled reasoning as
+    having asked for it, directly beside the `reasoning_tokens: 0` that says
+    otherwise.
+    """
+    effort = hyperparameters.get("reasoning_effort")
+    if effort and effort != "none":
+        return True
+    reasoning = (hyperparameters.get("request_extra") or {}).get("reasoning")
+    if not isinstance(reasoning, dict):
+        return False
+    # OpenRouter's off switch. `exclude` is not one: it hides the reasoning
+    # from the reply, having paid for it.
+    if reasoning.get("enabled") is False:
+        return False
+    return bool(reasoning)
 
 
 def _installed_commit() -> str | None:

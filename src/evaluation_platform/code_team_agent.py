@@ -14,14 +14,49 @@ from evaluation_platform.experiment_config import (
 from evaluation_platform.model_usage import populate_usage_context
 
 CODE_TEAM_COMMIT = "c095631730bf669c9c9ef1a0e87739e18caf6a7c"
-# Upstream, not a fork. Nothing in CodeTeam is modified for this project,
-# so there is nothing for a fork to hold; pointing a configuration at one
-# is a matter of setting `agent.repository` when there is.
+# Upstream, not a fork. What this project changes in CodeTeam travels as the
+# patch below, applied to this commit after checkout, so that the deviation
+# stays legible in the harness and in every run's own record rather than
+# disappearing into a branch nobody diffs. Pointing a configuration at a fork
+# is still a matter of setting `agent.repository`.
 CODE_TEAM_REPOSITORY = "https://github.com/WhitenWhiten/CodeTeam.git"
 CODE_TEAM_ROOT = "/installed-agent/code-team"
 TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
 HYPERPARAMETERS_PATH = "/installed-agent/hyperparameters.json"
+# Two defects on the asynchronous path, which is the one a run takes. Neither
+# is a matter of how CodeTeam decides anything, and each is contradicted by
+# upstream's own code, so the patch restores stated behaviour rather than
+# altering it.
+#
+# The QA role runs pytest and hands what it reads to the router that decides
+# which developer repairs which file. The scraper in between keeps only lines
+# beginning `E   ` or `Traceback`, or carrying `FAILED` or `ERROR at`, and
+# pytest names the failing source file on none of those: it prints that on its
+# own location lines, `path/to/file.py:LINENO:`. Every failure therefore
+# reached the router with no source path, was dropped as unroutable, and the
+# repair loop stopped before its first round — the arm's defining mechanism,
+# never running. Upstream's `tests/test_qa_routing.py` asserts the successful
+# QA run this prevents. The router itself is untouched and still chooses the
+# file and the developer on its own.
+#
+# The second is a shallow `__dict__` in the asynchronous workflow's `sds_map`.
+# A `ClassBrief`'s `methods` survives it as a list of `FuncBrief` objects, and
+# the developer prompt subscripts them, so any file whose specification
+# declares a class method ends the run before a line is written. The
+# synchronous workflow already converts recursively, under a comment saying to
+# keep doing so; this ports that conversion across.
+CODE_TEAM_PATCH = "code_team_upstream_fixes.patch"
+CODE_TEAM_PATCH_PATH = f"/installed-agent/{CODE_TEAM_PATCH}"
 TASK_WORKSPACE = "/workspace"
+# The tester sidecar grades with the workspace importable: it copies the agent's
+# tree over the reference checkout, runs `pip install -e .`, and imports the
+# package from there. The agent container offers QA no equivalent, so CodeTeam's
+# `pytest -q .codeteam_qa/tests` puts only that test directory on `sys.path` and
+# cannot import the package it was asked to test — a collection error before any
+# assertion runs, which the tool reads as a failure it has no fix for. Giving the
+# run the view the grader already has costs one variable, and is the same one the
+# benchmark's own test image sets.
+AGENT_PYTHONPATH = TASK_WORKSPACE
 # Git asks a terminal for credentials it was not given, and a task
 # container has no terminal to ask.
 GIT_NON_INTERACTIVE = {"GIT_TERMINAL_PROMPT": "0"}
@@ -39,7 +74,11 @@ RUNTIME_PACKAGES = (
     "jsonschema==4.26.0",
     # The QA role runs pytest in the workspace between repair rounds. Without
     # it the tool silently substitutes a hand-written test runner of its own.
-    "pytest==9.1.1",
+    # Pinned to the version the tester sidecar grades with, which is also the
+    # version the task specification tells the agent is installed: a repair
+    # round and the verifier should not disagree about what collects and how a
+    # failure is reported.
+    "pytest==8.4.1",
 )
 # Retrieval grounding for the Architect stage, installed only for a run that
 # asks for it. The vector path is the paper's own and pulls an embedding model
@@ -87,13 +126,23 @@ class CodeTeamAgent(BaseInstalledAgent):
                 + " ".join(f"'{package}'" for package in self._packages())
             ),
         )
+        await self._upload_agent_owned_file(
+            environment,
+            Path(__file__).with_name(CODE_TEAM_PATCH),
+            CODE_TEAM_PATCH_PATH,
+        )
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
                 f"rm -rf {CODE_TEAM_ROOT}; "
                 f"git clone --quiet {self.repository} {CODE_TEAM_ROOT}; "
-                f"git -C {CODE_TEAM_ROOT} checkout --quiet {self.commit}"
+                f"git -C {CODE_TEAM_ROOT} checkout --quiet {self.commit}; "
+                # Deliberately strict, and part of the same failing command: a
+                # revision the patch no longer fits should end the trial here,
+                # rather than let it run to a reward with the repair loop
+                # silently disabled and nothing in the result to say so.
+                f"git -C {CODE_TEAM_ROOT} apply {CODE_TEAM_PATCH_PATH}"
             ),
             # The container has no credentials and nobody to ask for them. A
             # repository that is private, renamed, or misspelled otherwise
@@ -160,6 +209,7 @@ class CodeTeamAgent(BaseInstalledAgent):
                 env={
                     "HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH,
                     "CODE_TEAM_HYPERPARAMETERS_PATH": HYPERPARAMETERS_PATH,
+                    "PYTHONPATH": AGENT_PYTHONPATH,
                 },
                 cwd=TASK_WORKSPACE,
             )

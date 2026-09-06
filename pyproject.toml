@@ -29,3 +29,9 @@ testpaths = ["tests"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The CodeTeam patch is read from beside its agent module and uploaded into the
+# task container. A build that dropped it would install an arm whose repair loop
+# never runs, which is the one failure this whole patch exists to prevent.
+evaluation_platform = ["*.patch"]
+

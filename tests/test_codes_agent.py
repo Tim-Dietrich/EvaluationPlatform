@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
 from textwrap import dedent
 from types import ModuleType, SimpleNamespace
@@ -35,6 +36,7 @@ from evaluation_platform.run_codes import (
     REPO_SKETCH,
     BudgetExhausted,
     _Budget,
+    _client,
     _is_rate_limit,
     _memoise_file_sketching,
     _read_templates,
@@ -182,6 +184,7 @@ def test_run_uploads_the_complete_setup_including_filled_in_defaults(tmp_path):
     assert hyperparameters["concurrent_requests"] == 8
     assert hyperparameters["request_attempts"] == 5
     assert hyperparameters["retry_temperature"] == 0.1
+    assert hyperparameters["request_timeout_seconds"] == 600
     # The sampling this pipeline's every request will carry, from the one file
     # that sets it for every arm, beside the solution's own settings.
     shared = resolve_generation_kwargs({})
@@ -896,6 +899,87 @@ def test_the_run_records_the_sampling_every_phase_used(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    "hyperparameters, expected",
+    [
+        # The shape every configuration in this repository uses to turn
+        # reasoning off. Read as a truthy dict it recorded the opposite of what
+        # it asked for, beside a `reasoning_tokens` of zero that said so.
+        ({"request_extra": {"reasoning": {"enabled": False}}}, False),
+        ({"request_extra": {"reasoning": {"enabled": True}}}, True),
+        ({"request_extra": {"reasoning": {"effort": "high"}}}, True),
+        # Reasoning paid for and hidden from the reply is still reasoning.
+        ({"request_extra": {"reasoning": {"exclude": True}}}, True),
+        # A request extra that is about something else entirely.
+        ({"request_extra": {"provider": {"order": ["baidu/fp8"]}}}, False),
+        ({"reasoning_effort": "high"}, True),
+        ({"reasoning_effort": "none"}, False),
+        ({}, False),
+    ],
+)
+def test_the_record_says_whether_reasoning_was_asked_for_not_mentioned(
+        hyperparameters, expected
+):
+    assert run_codes._reasoning_requested(hyperparameters) is expected
+
+
+def test_the_record_says_which_file_cost_what_and_whether_its_sketch_survived():
+    """A run's shape is decided by two replies nobody configured.
+
+    `files_sketched` and `functions_requested` say a run fanned out; this says
+    which file did it, and that the sketch which declared them was a reply cut
+    off at the output ceiling rather than a design.
+    """
+    records = {
+        REPO_SKETCH: [],
+        FILE_SKETCH: [
+            {
+                "file_path": "small.py",
+                "parsed": "def a():\n    pass\n",
+                "finish_reason": "stop",
+            },
+            {
+                "file_path": "runaway.py",
+                # Cut off mid-definition: the ceiling, not a design.
+                "parsed": "def one():\n    pass\n\n\ndef two_",
+                "finish_reason": "length",
+            },
+            # Asked for, never answered — the budget stopped the phase first.
+            {"file_path": "unanswered.py"},
+        ],
+        FUNCTION_BODY: [
+            {"current_file_path": "small.py", "generated": "..."},
+            {"current_file_path": "runaway.py", "generated": "..."},
+            {"current_file_path": "runaway.py"},
+            {"current_file_path": "runaway.py"},
+        ],
+    }
+
+    files = {each["file_path"]: each for each in run_codes._per_file(records)}
+
+    # Widest first, so the file that set the size of the run reads first.
+    assert [each["file_path"] for each in run_codes._per_file(records)][0] == "runaway.py"
+    assert files["runaway.py"]["functions_requested"] == 3
+    assert files["runaway.py"]["functions_answered"] == 1
+    assert files["runaway.py"]["sketch_parses"] is False
+    assert files["runaway.py"]["sketch_finish_reason"] == "length"
+    assert files["small.py"]["functions_requested"] == 1
+    assert files["small.py"]["sketch_parses"] is True
+    assert files["unanswered.py"]["sketch_answered"] is False
+    assert files["unanswered.py"]["sketch_parses"] is None
+    assert files["unanswered.py"]["sketch_chars"] is None
+
+
+def test_a_response_records_the_reason_it_ended_on_the_prompt_it_answered():
+    """The tally counts how many replies hit the ceiling; this says which."""
+    client, request = requester([response(finish_reason="length")])
+    prompt = {"instruction": "sketch a file", "file_path": "wide.py"}
+
+    request(prompt)
+
+    assert prompt["finish_reason"] == "length"
+
+
 def test_a_rate_limit_is_recognised_by_status_before_message():
     assert _is_rate_limit(RateLimited("throttled"))
     assert _is_rate_limit(RuntimeError("HTTP 429 Too Many Requests"))
@@ -921,6 +1005,75 @@ def test_a_pipeline_without_a_budget_is_bounded_only_by_harbors_timeout():
 
     assert budget.seconds is None
     assert budget.tokens is None
+
+
+def test_the_client_leaves_the_retrying_to_the_recorded_attempts(monkeypatch):
+    """Fifteen requests where the configuration asked for five.
+
+    The OpenAI client waits ten minutes on every read and retries twice on its
+    own by default. Beneath the attempts here that is two and a half hours
+    spent on one file sketch, against a task allowed one — and spent inside a
+    single call, where neither budget can see it.
+    """
+    built: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("API_KEY_ENV", "API_KEY")
+    monkeypatch.setenv("API_KEY", "secret")
+    monkeypatch.setenv("BASE_URL", "https://openrouter.ai/api/v1")
+
+    _client(CODE_S.resolve({})["request_timeout_seconds"])
+
+    assert built["max_retries"] == 0
+    assert built["timeout"] == 600.0
+
+
+class SpendingThenFailing:
+    """A provider that charges for an attempt and then fails it."""
+
+    def __init__(self, totals: UsageTotals, per_attempt: int):
+        self.calls = 0
+        self._totals = totals
+        self._per_attempt = per_attempt
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        self._totals.output_tokens += self._per_attempt
+        raise RuntimeError("the provider stopped answering")
+
+
+def test_a_budget_already_spent_stops_the_attempts_a_prompt_has_left():
+    """A prompt costs `request_attempts * request_timeout_seconds` at worst.
+
+    Read once on the way into a prompt, a budget cannot end a run until every
+    one of those attempts has been paid for. That is how a run reaches
+    Harbor's timeout with a budget it spent long before, and a killed
+    container writes no repository, no records and no usage at all.
+    """
+    totals = UsageTotals()
+    resolved = CODE_S.resolve(
+        {"request_attempts": 5, "max_token_budget": 25}
+    ) | resolve_generation_kwargs({})
+    completions = SpendingThenFailing(totals, per_attempt=20)
+    request = _requester(
+        SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+        resolved,
+        totals,
+        _Budget(resolved, totals),
+        model="test/model",
+        sleep=[].append,
+    )
+
+    with pytest.raises(BudgetExhausted, match="max_token_budget"):
+        request({"instruction": "sketch a file"})
+
+    # Two attempts made, three abandoned: the third was refused by the budget
+    # rather than sent and waited out.
+    assert completions.calls == 2
 
 
 def test_an_unreadable_tool_repository_fails_instead_of_waiting_for_a_password(

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,9 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 from evaluation_platform.code_team_agent import (
+    AGENT_PYTHONPATH,
     CODE_TEAM_COMMIT,
+    CODE_TEAM_PATCH_PATH,
     CODE_TEAM_ROOT,
     HYPERPARAMETERS_PATH,
     RUNTIME_PACKAGES,
@@ -31,6 +34,7 @@ from evaluation_platform.model_routing import ServedProviders
 from evaluation_platform.run_code_team import (
     _build_config,
     _build_context,
+    _build_llm,
     _instrumented_client,
     _is_rate_limit,
     _record_resolved_setup,
@@ -87,13 +91,41 @@ def test_install_pins_the_revision_and_uploads_the_runner(tmp_path):
     targets = [target for _, target in environment.uploads]
     # The runner imports the shared usage accounting and the shared provider
     # routing by their flat names, so both have to
-    # arrive beside it.
+    # arrive beside it. The patch goes up before the clone that consumes it.
     assert targets == [
+        CODE_TEAM_PATCH_PATH,
         "/installed-agent/run_code_team.py",
         "/installed-agent/model_usage.py",
         "/installed-agent/model_routing.py",
         "/installed-agent/failure_categories.py",
     ]
+
+
+def test_install_patches_the_known_defects_of_the_pinned_revision(tmp_path):
+    environment = install(CodeTeamAgent(logs_dir=tmp_path))
+
+    patch = uploaded(environment)[CODE_TEAM_PATCH_PATH]
+    # Both runtime adapters carry the same scraper; the asynchronous one is what
+    # a run reaches, the synchronous one is its twin.
+    assert "runtime_adapters/python_runtime_async.py" in patch
+    assert "runtime_adapters/python_runtime.py" in patch
+    assert "_FAILURE_LOCATION" in patch
+    # The shallow `__dict__` that ends a run on the first file specification
+    # declaring a class method.
+    assert "orchestrator/workflow_async.py" in patch
+    assert "methods_dicts" in patch
+
+    clone = next(
+        command["command"]
+        for command in environment.commands
+        if "git clone" in command["command"]
+    )
+    # The checkout and the patch share one failing command, so a revision the
+    # patch no longer fits ends the trial instead of running the arm with its
+    # repair loop disabled and nothing in the result to show it.
+    assert "set -euo pipefail" in clone
+    assert f"git -C {CODE_TEAM_ROOT} apply {CODE_TEAM_PATCH_PATH}" in clone
+    assert clone.index(CODE_TEAM_COMMIT) < clone.index("apply")
 
 
 def test_install_leaves_out_the_retrieval_stack_a_run_will_not_use(tmp_path):
@@ -145,6 +177,7 @@ def test_run_uploads_instruction_instead_of_putting_it_on_docker_command_line(tm
     assert invocation["env"] == {
         "HARBOR_TASK_INSTRUCTION_PATH": TASK_INSTRUCTION_PATH,
         "CODE_TEAM_HYPERPARAMETERS_PATH": HYPERPARAMETERS_PATH,
+        "PYTHONPATH": AGENT_PYTHONPATH,
     }
     assert uploaded(environment)[TASK_INSTRUCTION_PATH] == instruction
     assert invocation["cwd"] == TASK_WORKSPACE
@@ -385,6 +418,51 @@ def response(prompt=10, completion=5, cached=2, reasoning=1, cost=0.5):
 
 class RateLimited(Exception):
     status_code = 429
+
+
+def test_the_tools_client_cannot_wait_out_the_trial_on_one_request(monkeypatch):
+    """Nine requests where `core.llm_openai` asked for three.
+
+    The tool builds its client with the SDK's defaults: ten minutes on every
+    read and two retries of its own beneath the three attempts `text` and
+    `structured_json` already make. That is an hour and a half spent on one
+    request against a task allowed one hour — and spent inside a call the
+    workflow's own budget check, read between scheduler steps, cannot see.
+    """
+    options: dict[str, Any] = {}
+
+    class FakeRawClient:
+        def with_options(self, **kwargs):
+            options.update(kwargs)
+            return FakeClient([response()])
+
+    class FakeOpenAILLM:
+        def __init__(self, **_kwargs):
+            self.client = FakeRawClient()
+
+    monkeypatch.setitem(
+        sys.modules, "core.llm_openai", SimpleNamespace(OpenAILLM=FakeOpenAILLM)
+    )
+    monkeypatch.setenv("API_KEY_ENV", "API_KEY")
+    monkeypatch.setenv("API_KEY", "secret")
+    config = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="test/model",
+            temperature=0.2,
+            top_p=0.95,
+            max_tokens=8192,
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+    hyperparameters = CODE_TEAM.resolve({}) | resolve_generation_kwargs({})
+
+    _build_llm(config, hyperparameters, UsageTotals())
+
+    assert options == {
+        "timeout": float(hyperparameters["request_timeout_seconds"]),
+        # The tool's own three attempts stay the only retries.
+        "max_retries": 0,
+    }
 
 
 def test_reasoning_settings_are_added_to_a_request_the_tool_builds():

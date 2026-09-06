@@ -174,6 +174,17 @@ def _build_llm(
 
     Both are supplied by wrapping the one method the tool calls, so the tool's
     own request construction, retries, and JSON repair are unchanged.
+
+    A third thing is bounded rather than supplied. `core.llm_openai` builds its
+    client with the SDK's defaults, which wait ten minutes on every read and
+    retry twice underneath the three attempts `text` and `structured_json`
+    already make. A provider that returns headers and then stops answering
+    therefore costs `3 * 3 * 600` seconds — an hour and a half on one request,
+    against a task allowed one hour — and spends it inside a call that the
+    workflow's own `_check_resource_limits`, read between scheduler steps,
+    cannot see. `with_options` returns the same client with those two bounded:
+    the messages, the sampling and the model are untouched, and the tool's own
+    three attempts stay the only retries.
     """
     llm_module = importlib.import_module("core.llm_openai")
     api_key_env = os.environ.get("API_KEY_ENV", "OPENAI_API_KEY")
@@ -186,7 +197,10 @@ def _build_llm(
         api_key=os.environ.get(api_key_env),
     )
     llm.client = _instrumented_client(
-        llm.client,
+        llm.client.with_options(
+            timeout=float(hyperparameters["request_timeout_seconds"]),
+            max_retries=0,
+        ),
         totals,
         model=config.llm.model,
         reasoning_effort=hyperparameters.get("reasoning_effort"),
@@ -350,6 +364,12 @@ def _record_resolved_setup(
         json.dumps(
             {
                 "code_team_commit": _installed_commit(),
+                # The commit alone no longer says what ran. The harness patches
+                # CodeTeam's QA output scraper after checkout, without which the
+                # repair loop stops before its first round, so the deviation
+                # belongs in the run's own record and not only in the harness
+                # that caused it.
+                "code_team_patched_files": _patched_files(),
                 "model": config.llm.model,
                 "base_url": config.llm.base_url,
                 # What the run asked of the aggregator, and which
@@ -403,6 +423,28 @@ def _installed_commit() -> str | None:
     except OSError:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _patched_files() -> list[str]:
+    """Which of CodeTeam's files the harness changed after checking it out.
+
+    Read off the checkout itself rather than off the harness's intent, so that
+    a run whose patch silently failed to apply is distinguishable afterwards
+    from one whose patch took.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=CODE_TEAM_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
 if __name__ == "__main__":

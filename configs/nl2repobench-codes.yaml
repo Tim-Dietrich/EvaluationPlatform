@@ -1,0 +1,49 @@
+
+name: nl2repobench-codes
+description: >-
+  CodeS (RepoSketcher -> FileSketcher -> SketchFiller) generates the
+  math-verify library from NL2RepoBench's natural-language specification. The
+  hidden reference tests stay in the tester sidecar and are never visible to
+  the agent; the reward is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 10
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  n_tasks: 5
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+
+agent:
+  import_path: evaluation_platform.codes_agent:CodeSAgent
+  n_concurrent: 10
+  repository: https://github.com/NL2Code/CodeS.git
+  commit: 0b624ab4ef22b0d9d223f274a986eb27fe090c88
+  hyperparameters:
+    request_attempts: 5
+    retry_temperature: 0.2
+    request_timeout_seconds: 600
+    request_extra:
+      reasoning:
+        enabled: false
+    concurrent_requests: 40
+    max_wall_clock_seconds: 2700
+    max_token_budget: 2000000

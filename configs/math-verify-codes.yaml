@@ -45,53 +45,19 @@ benchmark:
 
 model:
   provider: ${MODEL_PROVIDER:-openrouter}
-  name: ${MODEL:-moonshotai/kimi-k2.5}
+  name: openai/gpt-3.5-turbo
   base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
   api_key_env: API_KEY
-  # Which of the aggregator's servers may answer. A model name does not name a
-  # server: OpenRouter offers this model from more than twenty providers that
-  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
-  # very different speeds, and its default route is chosen by price. Unpinned,
-  # two arms of this comparison can run the same model at different numerical
-  # precision, and so can two requests inside one arm, with nothing recording
-  # which. That is a confound in the one variable every configuration here
-  # holds constant, so it is pinned beside the model rather than left to the
-  # aggregator, and it belongs in `model` rather than in any solution's
-  # hyperparameters because it is not a property of a method. The test that
-  # requires these blocks to agree across configurations is therefore the test
-  # that keeps every arm on one server.
-  #
-  # Measured on 2026-08-26, one 500-token generation each: the default route
-  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
-  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
-  # tokens, the best speed for the money among the endpoints this account may
-  # use. siliconflow/fp8 is the named second choice because it is the only
-  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
-  # precision this pin exists to fix; `allow_fallbacks: false` stops the
-  # aggregator substituting anything outside the pair.
-  #
-  # These tags name endpoints *of the model above*. Changing the model means
-  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
-  # on offer, with each endpoint's quantization and price.
   routing:
     order:
-      - baidu/fp8
-      - siliconflow/fp8
+      - openai
+#      - baidu/fp8
+#      - siliconflow/fp8
     allow_fallbacks: false
 
 agent:
   import_path: evaluation_platform.codes_agent:CodeSAgent
-  # How many trials may call the model at once. `concurrent_requests` below is
-  # a second multiplier inside each of them, so the requests in flight against
-  # the provider are the product of the two, not either one alone.
   n_concurrent: 1
-  # The revision of the code generation tool under evaluation. Pinning it here
-  # keeps the tool's version part of the recorded setup. No file of CodeS is
-  # modified for this project — what is supplied around it is described in
-  # docs/latex/tool-modifications.tex — so this names the authors' repository
-  # rather than a fork of it. A fork is one line here once there is something
-  # in it, and it has to be readable without credentials: the task container
-  # has none, and a private repository fails the clone rather than the run.
   repository: https://github.com/NL2Code/CodeS.git
   commit: 0b624ab4ef22b0d9d223f274a986eb27fe090c88
   hyperparameters:
@@ -112,50 +78,25 @@ agent:
     # setting the other arms have: it is what this tool does with a request the
     # provider refused, rather than how the comparison samples.
     request_attempts: 5
-    retry_temperature: 0.1
-
-    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
-    # It is set for every arm at once in `configs/generation.yaml`, so that a
-    # difference between this run and the arms beside it is a difference in
-    # method. Stating one of the three here is rejected before Docker starts.
-
-    # Reasoning, pinned rather than inherited, exactly as in the two
-    # configurations beside this one. CodeS sends no reasoning setting of its
-    # own, so without this the amount of reasoning is whatever the provider
-    # defaults to for the model at that moment — invisible in the record and
-    # free to change between runs. `request_extra` is merged into the request
-    # body verbatim, so it carries OpenRouter's `reasoning` object as well as
-    # other providers' shapes; the OpenAI-compatible `reasoning_effort` field
-    # is available as a hyperparameter of its own. What actually happened is
-    # recorded as `reasoning_tokens` in the run's model usage.
+    retry_temperature: 0.2
+    # What the aggregator's silence costs. OpenRouter answers a non-streaming
+    # request by returning the headers at once and the body when the provider
+    # is done, so a stalled reply is indistinguishable from a slow one and
+    # moves no bytes at all while it hangs. The client's own default is ten
+    # minutes per read with two retries beneath the five attempts above, which
+    # is two and a half hours for one file sketch; this is the figure the other
+    # arms use, applied once rather than nine times.
+    request_timeout_seconds: 600
     request_extra:
       reasoning:
         enabled: false
-
-    # How many of one phase's requests are in flight at once. The published
-    # pipeline is strictly sequential, which is what `1` — the default — does.
-    # It is raised here because of the arithmetic above: a repository of ten
-    # modules declaring sixty functions is seventy-one requests, and in
-    # sequence that exceeds the task's own agent timeout before the pipeline
-    # can finish, which scores as an error rather than as a poor repository.
-    #
-    # This is safe to vary because of what the phases are. Every file sketch
-    # reads the one repository sketch, and every function body reads the
-    # completed set of file sketches, so no request in a phase can see another
-    # request in the same phase whatever the order. Raising it changes how long
-    # a task takes and not what any prompt says. Lower it to 1 to run the
-    # published pipeline exactly, and note that the provider sees this many
-    # requests per trial times `n_concurrent` trials.
-    concurrent_requests: 4
-
-    # Budgets. CodeS has no bound of its own on what a task costs, and unlike
-    # the other two solutions it cannot be bounded by asking for fewer rounds:
-    # the number of requests is a property of the design the model proposed in
-    # its first response. Without a budget the only limit is the task's own
-    # agent timeout, and a trial that reaches that is scored as an error with
-    # nothing to show. These stop the run first; whatever the pipeline has
-    # produced by then is still assembled into the workspace, so a repository
-    # of correct interfaces with some bodies unfilled is graded rather than
-    # discarded.
-    max_wall_clock_seconds: 3600
+    concurrent_requests: 40
+    # Under the task's own `[agent] timeout_sec = 3600`, not equal to it. The
+    # budget is what lets a run stop itself and assemble what it paid for; a
+    # budget that can only be reached at the same moment Harbor's timeout is
+    # reached is never the one that fires, and a killed container writes no
+    # repository, no records and no usage. The headroom covers the one attempt
+    # already in flight when the budget is spent (`request_timeout_seconds`
+    # above) and the assembly stage that follows.
+    max_wall_clock_seconds: 2700
     max_token_budget: 2000000

@@ -29,7 +29,7 @@ description: >-
 
 run:
   jobs_dir: jobs
-  n_attempts: 5
+  n_attempts: 1
   n_concurrent_trials: 5
   artifacts:
     - /workspace
@@ -37,8 +37,9 @@ run:
 benchmark:
   dataset: nl2repobench/nl2repobench
   ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
-  task_names:
-    - nl2repobench/math-verify
+  #  task_names:
+  #    - nl2repobench/math-verify
+  n_tasks: 5
   image_mirror:
     - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
       pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
@@ -46,12 +47,12 @@ benchmark:
 model:
   provider: ${MODEL_PROVIDER:-openrouter}
 #  name: ${MODEL:-moonshotai/kimi-k2.5}
-  name: qwen/qwen-2.5-72b-instruct
+  name: qwen/qwen3-235b-a22b-2507
   base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
   api_key_env: API_KEY
   routing:
     order:
-      - deepinfra/fp8
+      - gmicloud/fp8
 #      - baidu/fp8
 #      - siliconflow/fp8
     allow_fallbacks: false
@@ -92,8 +93,8 @@ agent:
     # files are dealt round-robin to a fixed number. The two together are the
     # paper's `w/o dynamic` ablation, which is `false` here plus the count
     # below.
-    dynamic_developer_allocation: true
-    fixed_developer_agents: 4
+    dynamic_developer_allocation: false
+    fixed_developer_agents: 1
     developer_assignment_seed: 0
     # Developers propagate interface changes to each other as Git commits
     # carrying a structured update reason. Set to `false` for the paper's
@@ -137,6 +138,14 @@ agent:
       reasoning:
         enabled: false
 
+    # What one request may cost. `core.llm_openai` builds its client with the
+    # SDK's defaults — ten minutes per read, two retries of its own — beneath
+    # the three attempts it already makes itself, so a provider that returns
+    # headers and then stops answering holds the run for an hour and a half on
+    # a single request. Bounded here, a stalled reply costs this once, and the
+    # tool's own three attempts stay the only retries.
+    request_timeout_seconds: 300
+
     # Budgets. CodeTeam has no bound of its own on how long a task may take or
     # how many tokens it may spend: architects, developers, and QA rounds each
     # cost what they cost, and a design that names many files costs more than
@@ -144,5 +153,16 @@ agent:
     # agent timeout, and a trial that reaches that is scored as an error with
     # nothing to show. These stop the run first and leave the workspace as it
     # stood, which the verifier can still grade.
-    max_wall_clock_seconds: 3600
+    #
+    # Which is only true if the budget can be reached before the task's own
+    # `[agent] timeout_sec = 3600`. Set equal to it, as it was, the budget is
+    # never what stops a run: Harbor kills the container first, and the usage,
+    # the failure tally and the record of which servers answered are all lost
+    # with it. The tool reads its budget between scheduler steps, so what has
+    # to fit underneath is the budget, the request still in flight when it is
+    # spent — three attempts at `request_timeout_seconds` above — and the
+    # artifact writing after that:
+    #
+    #     2400 + (3 * 300) + 300 = 3600
+    max_wall_clock_seconds: 2400
     max_token_budget: 2000000

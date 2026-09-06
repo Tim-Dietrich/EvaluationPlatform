@@ -307,6 +307,51 @@ stay one. It is worth the exception here because the alternative was
 publishing somebody else's benchmark to a shared registry under our own
 account.
 
+### A benchmark that is nowhere but inside a tool
+
+SketchEval is the second, and it is generated for a stronger reason: it is not
+published as a dataset anywhere at all. It exists as a directory inside the
+CodeS repository — nineteen Python projects under `validation/cleaned_repos/` —
+which this project already pins as a submodule, because CodeS is one of the
+solutions under test. So the tasks are generated from that commit:
+
+```bash
+python scripts/build_sketcheval_tasks.py
+```
+
+```yaml
+benchmark:
+  path: benchmarks/sketcheval/tasks
+```
+
+Three things about it are unlike every other benchmark here, and all three
+belong in front of any result it produces.
+
+**The reward is a similarity score, not a passing fraction.** SketchBLEU — the
+CodeS authors' `calc_repobleu` — scores a generated repository against a
+reference repository: a quarter each of n-gram match, keyword-weighted n-gram
+match, AST subtree match and dataflow match. Nothing is executed and there are
+no hidden tests. A SketchEval reward and an NL2RepoBench reward are different
+quantities, and a figure that puts them on one axis is measuring nothing.
+
+**The attainable ceiling is below 1.0 and differs per repository.** Scoring a
+reference against itself returns 1.0 for three components and less for
+dataflow, because tree-sitter extracts no dataflow from some functions and the
+assignment leaves those unmatched. Eight of the nineteen reach 1.0; flameshow's
+ceiling is 0.9796. Read a reward against its repository's ceiling.
+
+**It is CodeS's own benchmark.** SketchEval was introduced by the CodeS paper
+and ships in the CodeS repository, so an arm evaluated on it is on ground its
+authors chose. Worth saying whenever the result sits beside one from
+NL2RepoBench, which belongs to nobody in this comparison.
+
+`benchmarks/sketcheval/README.md` is the longer form: the per-repository
+ceilings, how the metric is pinned and why two of its build pins are
+load-bearing, what a workspace the metric cannot score is scored as, and why
+the instruction is the repository's README with nothing appended to it.
+`configs/sketcheval-codes.yaml` runs CodeS against it, with the `model` and
+`agent` blocks byte-identical to `math-verify-codes.yaml`.
+
 ## Running a whole benchmark
 
 A NL2RepoBench task takes around six minutes, so 104 of them in sequence is

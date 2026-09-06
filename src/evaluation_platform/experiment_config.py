@@ -293,10 +293,19 @@ CODE_TEAM = AgentHyperparameters(
         # Harbor's timeout. Sampling is not here: see GENERATION_PARAMETERS.
         "reasoning_effort": str,
         "request_extra": dict,
+        # How long one request may wait for a reply. `core.llm_openai` builds
+        # its client with the SDK's defaults — ten minutes per read, two
+        # retries of its own — beneath the three attempts it already makes, so
+        # a provider that stops answering costs an hour and a half on one
+        # request. The budgets below are read between scheduler steps and
+        # cannot see inside that call, which is how a run reaches Harbor's
+        # timeout with a budget it spent long before.
+        "request_timeout_seconds": int,
         "max_wall_clock_seconds": int,
         "max_token_budget": int,
     },
     defaults={
+        "request_timeout_seconds": 600,
         "architects": 4,
         "sds_retry": 1,
         "preprocess_requirements": True,
@@ -337,6 +346,14 @@ CODE_S = AgentHyperparameters(
         # How a request is made, and what happens when one fails.
         "request_attempts": int,
         "retry_temperature": float,
+        # How long one attempt may wait for a reply. The OpenAI client's own
+        # default is ten minutes per read with two retries of its own beneath
+        # the attempts above, so a single stalled file sketch can hold the
+        # pipeline for hours while the budgets below — read between requests —
+        # never get a turn. Stated here so that what bounds a request is part
+        # of the recorded setup, and so the attempts above stay the only
+        # retries.
+        "request_timeout_seconds": int,
         # How many of the requests within one phase are in flight at once. Both
         # fan-out phases are batches of independent requests, so this changes
         # how long a task takes and not what is asked.
@@ -351,6 +368,7 @@ CODE_S = AgentHyperparameters(
     defaults={
         "request_attempts": 5,
         "retry_temperature": 0.1,
+        "request_timeout_seconds": 600,
         "concurrent_requests": 1,
     },
 )

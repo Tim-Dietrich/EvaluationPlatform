@@ -710,6 +710,23 @@ def test_the_shipped_codeteam_configuration_resolves_to_a_complete_setup():
     # A budget, because the tool has no bound of its own on what a task costs.
     assert hyperparameters["max_wall_clock_seconds"] >= 1
     assert hyperparameters["max_token_budget"] >= 1
+    # A request is bounded, so that a provider which returns headers and then
+    # stops answering costs one request rather than the trial.
+    assert hyperparameters["request_timeout_seconds"] >= 1
+    # And the budget has room to fire beneath the task's own agent timeout,
+    # which is what makes it — rather than Harbor's kill — the thing that ends
+    # a long run, leaving the workspace and the run's records behind. The tool
+    # reads its budget between scheduler steps, so the request in flight when
+    # the budget is spent is `core.llm_openai`'s three attempts long.
+    #
+    # 3600 is `[agent] timeout_sec` in NL2RepoBench's own `task.toml`.
+    nl2repobench_agent_timeout_seconds = 3600
+    code_team_attempts_per_request = 3
+    assert (
+        hyperparameters["max_wall_clock_seconds"]
+        + code_team_attempts_per_request * hyperparameters["request_timeout_seconds"]
+        < nl2repobench_agent_timeout_seconds
+    )
 
 
 def test_the_shipped_codes_configuration_resolves_to_a_complete_setup():
@@ -732,6 +749,24 @@ def test_the_shipped_codes_configuration_resolves_to_a_complete_setup():
     # rather than by a number of rounds a configuration could lower.
     assert hyperparameters["max_wall_clock_seconds"] >= 1
     assert hyperparameters["max_token_budget"] >= 1
+    # A request is bounded, so that a provider which returns headers and then
+    # stops answering costs one timeout rather than the trial.
+    assert hyperparameters["request_timeout_seconds"] >= 1
+    # And the budget has room to fire beneath the task's own agent timeout.
+    # Set equal to it, the budget is never what stops a run: Harbor kills the
+    # container first, and the `finally` that writes the repository, the phase
+    # records and the usage never runs. What has to fit under it is the budget,
+    # the one attempt still in flight when the budget is spent, and the
+    # assembly stage after that.
+    #
+    # 3600 is `[agent] timeout_sec` in NL2RepoBench's own `task.toml`, which is
+    # the same for every task in the benchmark.
+    nl2repobench_agent_timeout_seconds = 3600
+    assert (
+        hyperparameters["max_wall_clock_seconds"]
+        + hyperparameters["request_timeout_seconds"]
+        < nl2repobench_agent_timeout_seconds
+    )
 
 
 def test_the_codes_configuration_stays_within_the_provider_limit_it_declares():
