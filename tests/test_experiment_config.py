@@ -124,16 +124,25 @@ def test_omitted_hyperparameters_fall_back_to_recorded_defaults(tmp_path):
     assert config.hyperparameters["coder_steps"] == 15
 
 
-def shipped_configurations() -> list[Path]:
-    """Every experiment configuration in `configs/`, and not the sampling file.
+def is_sampling_file(path: Path) -> bool:
+    """Whether a file in `configs/` sets sampling rather than describing a run.
 
-    The sampling file lives beside them and is not one of them: it sets three
-    values for every arm and names no benchmark, model or agent.
+    Told apart by shape rather than by name, because there is more than one:
+    `generation.yaml` sets the three values for the NL2RepoBench comparison and
+    `generation-humaneval.yaml` for the replication beside it. A sampling file
+    states those three names and nothing else; an experiment configuration
+    names a benchmark, a model and an agent.
     """
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return set(document) <= set(GENERATION_PARAMETERS)
+
+
+def shipped_configurations() -> list[Path]:
+    """Every experiment configuration in `configs/`, and no sampling file."""
     return sorted(
         path
         for path in (ROOT / "configs").glob("*.yaml")
-        if path.name != GENERATION_CONFIG_PATH.name
+        if not is_sampling_file(path)
     )
 
 
@@ -144,20 +153,41 @@ def test_every_arm_samples_at_the_same_values_from_the_same_file():
     method wrapped around it. Before this file the arms disagreed on two of the
     three — CodeTeam sampled at 0.2 where the rest sampled at 0.0, and the
     output ceilings spanned 8192 to 32768 — and neither difference announces
-    itself in a reward figure. Every configuration now resolves to the same
-    three values, whichever solution it runs.
+    itself in a reward figure.
+
+    The invariant is per comparison rather than per directory, because there is
+    now more than one comparison here: the arms of the NL2RepoBench comparison
+    read `generation.yaml`, and the HumanEval replication reads the values the
+    paper it reproduces states. What must hold — and what this checks — is that
+    every configuration resolves its sampling from a file, that the file is one
+    of the sampling files shipped beside it, and that two configurations
+    reading the same file cannot disagree about a single value.
     """
-    shared = load_generation_config()
+    sampling_files = {
+        str(path)
+        for path in (ROOT / "configs").glob("*.yaml")
+        if is_sampling_file(path)
+    }
+    assert str(GENERATION_CONFIG_PATH) in sampling_files
 
     resolved = {
         path.name: load_experiment_config(path, ENVIRONMENT).generation
         for path in shipped_configurations()
     }
-
     assert resolved, "no experiment configurations were found"
+
+    by_file: dict[str, dict[str, tuple]] = {}
     for name, generation in resolved.items():
-        assert generation.as_kwargs() == shared.as_kwargs(), name
-        assert generation.source == str(GENERATION_CONFIG_PATH), name
+        assert generation.source in sampling_files, name
+        by_file.setdefault(generation.source, {})[name] = tuple(
+            sorted(generation.as_kwargs().items())
+        )
+
+    for source, arms in by_file.items():
+        values = load_generation_config(path=Path(source))
+        expected = tuple(sorted(values.as_kwargs().items()))
+        for name, sampled in arms.items():
+            assert sampled == expected, f"{name} against {source}"
 
 
 def test_no_configuration_sets_sampling_of_its_own():
@@ -793,3 +823,133 @@ def test_a_seed_of_zero_is_a_seed_rather_than_an_empty_budget(tmp_path):
             ),
             ENVIRONMENT,
         )
+
+
+def test_a_benchmark_names_a_registry_dataset_or_a_directory_but_not_both(tmp_path):
+    """The two ways a benchmark is named, and the one that is an error."""
+    path = write_config(
+        tmp_path,
+        benchmark={"dataset": "org/name", "path": "benchmarks/humaneval/tasks"},
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "exactly one" in str(error.value)
+
+
+def test_a_local_benchmark_cannot_state_a_registry_ref(tmp_path):
+    """A ref pins a registry version, and a directory has no registry.
+
+    What pins a local benchmark is a digest over its tasks, computed at launch.
+    Stating a ref would put a version in the record that nothing resolved.
+    """
+    path = write_config(
+        tmp_path,
+        benchmark={"path": "benchmarks/humaneval/tasks", "ref": "sha256:abc"},
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "digest" in str(error.value)
+
+
+# The revision every Self-Collaboration arm evaluates; see
+# `self_collaboration_agent.SELF_COLLABORATION_COMMIT`.
+SELF_COLLABORATION_COMMIT_UNDER_TEST = "a6490a9d0d32f3238cc5b776d2de8d2134d2b138"
+
+
+def test_the_shipped_humaneval_configuration_reproduces_the_papers_settings():
+    """The configuration is the experiment, so the paper's numbers are in it.
+
+    Every value below is quoted from the paper rather than chosen here, which
+    is what makes the orchestrator the only thing this run varies. The model is
+    the one exception, and it is the one the paper's own pin made unavoidable:
+    "gpt-3.5-turbo-0301" has been retired, and 0613 is the nearest snapshot
+    still served.
+    """
+    config = load_experiment_config(
+        ROOT / "configs" / "humaneval-self-collaboration.yaml", ENVIRONMENT
+    )
+    hyperparameters = config.hyperparameters
+
+    assert config.benchmark.path == "benchmarks/humaneval/tasks"
+    assert config.benchmark.dataset is None
+    # Pass@1 under greedy decoding is one attempt, which is what §4.1.4 reports.
+    assert config.run["n_attempts"] == 1
+    assert config.model_name == "openai/gpt-3.5-turbo-0613"
+
+    # "the maximum number of interactions between roles is limited to 4"
+    assert hyperparameters["max_rounds"] == 4
+    # "we set max tokens to 512 and temperature to 0 for code generation"
+    assert config.generation.temperature == 0.0
+    assert config.generation.max_tokens == 512
+    assert config.generation.source.endswith("generation-humaneval.yaml")
+
+    # The authors' HumanEval entry point, not the repository-shaped session
+    # the NL2RepoBench arms run.
+    assert hyperparameters["task_shape"] == "humaneval"
+    assert hyperparameters["max_steps"] == 10
+    # The tool is still pinned to the authors' own repository at one revision.
+    assert config.agent_commit == SELF_COLLABORATION_COMMIT_UNDER_TEST
+
+
+
+def test_the_humaneval_shape_refuses_a_test_command_it_cannot_run(tmp_path):
+    """The Tester on that entry point writes its own cases and runs them.
+
+    There is no command for a configuration to supply, so one written here is
+    refused rather than archived as part of a setup and then ignored.
+    """
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": (
+                "evaluation_platform.self_collaboration_agent:"
+                "SelfCollaborationAgent"
+            ),
+            "hyperparameters": {
+                "task_shape": "humaneval",
+                "test_command": "pytest -q",
+            },
+        },
+    )
+
+    with pytest.raises(ConfigurationError) as error:
+        load_experiment_config(path, ENVIRONMENT)
+
+    assert "test_command" in str(error.value)
+    assert "humaneval" in str(error.value)
+
+
+def test_the_repository_shape_is_what_a_configuration_gets_by_default():
+    """Adding a second entry point must not move the arms already running.
+
+    Every NL2RepoBench configuration predates `task_shape` and states none, so
+    the default is the shape they have always run.
+    """
+    for name in (
+            "math-verify-self-collaboration",
+            "nl2repobench-self-collaboration",
+    ):
+        config = load_experiment_config(
+            ROOT / "configs" / f"{name}.yaml", ENVIRONMENT
+        )
+        assert config.hyperparameters["task_shape"] == "repository"
+
+
+def test_an_unknown_task_shape_is_rejected_rather_than_run_as_the_default(tmp_path):
+    path = write_config(
+        tmp_path,
+        agent={
+            "import_path": (
+                "evaluation_platform.self_collaboration_agent:"
+                "SelfCollaborationAgent"
+            ),
+            "hyperparameters": {"task_shape": "mbpp"},
+        },
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_experiment_config(path, ENVIRONMENT)

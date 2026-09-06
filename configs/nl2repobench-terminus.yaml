@@ -1,0 +1,93 @@
+# Experiment setup: Terminus 2, the agentic baseline, against the whole
+# NL2RepoBench benchmark — all 104 tasks of the pinned dataset.
+#
+# `configs/math-verify-terminus.yaml` is this same arm narrowed to one task for
+# iterating on the setup cheaply; everything below except `name`,
+# `description`, the `run` block and the absent `task_names` is the same
+# configuration. The `benchmark` and `model` blocks are byte-identical to the
+# arms beside it, so a difference between the runs is a difference between the
+# methods rather than between the setups. The `run` block is the exception and
+# is not part of that claim: it says how this machine executes the run, not
+# what the run measures.
+#
+# What this arm is for: `nl2repobench-single-shot.yaml` asks what one request
+# buys, which is the comparison the papers themselves make. This asks the
+# question a reader will ask next. Terminus 2 is Harbor's own reference agent —
+# one model, one shell, one loop, no roles, no plan and no review — so it
+# isolates the *structure* of a multi-agent solution from the plain fact of
+# being able to iterate. A solution that beats a single request but not a
+# single agent has not shown that its roles are what did the work.
+#
+# There is no `repository` or `commit` here, and stating one is rejected.
+# Terminus ships inside Harbor, so what ran is the Harbor release this project
+# is installed with, recorded in the run's `resolved-setup.json`.
+#
+# Two things about this arm differ from the others by necessity, and both are
+# recorded rather than assumed. It is not installed into the task container:
+# the agent runs on the host and drives a tmux session inside the container.
+# And it reaches the provider through LiteLLM rather than through the OpenAI
+# client the other four share, so its tokens are counted by Harbor's own
+# accounting. The figures mean the same thing; the counter is not the same one.
+#
+# `${VAR:-default}` reads VAR from the environment (including `.env`) and falls
+# back to the literal after `:-`. The archived snapshot stores the resolved
+# value, never the template.
+
+name: nl2repobench-terminus
+description: >-
+  Terminus 2 — a single agent with a shell, no roles and no plan — generates
+  every NL2RepoBench library from its natural-language specification. Each
+  task's hidden reference tests stay in its tester sidecar and are never
+  visible to the agent; the reward per task is the fraction of them that pass.
+
+run:
+  jobs_dir: jobs
+  n_attempts: 1
+  n_concurrent_trials: 10
+  # What a transient failure costs. Over 104 tasks a provider hiccup or a lost
+  # connection is close to certain, and without this the affected task is
+  # scored as an error and its result is simply missing from the run. Harbor's
+  # own exclusions still apply, so the failures a retry cannot fix — a timeout,
+  # an exhausted usage limit, a rejected credential — fail once rather than
+  # three times.
+  retry:
+    max_retries: 2
+    wait_multiplier: 2
+    min_wait_sec: 5
+    max_wait_sec: 120
+  artifacts:
+    - /workspace
+
+benchmark:
+  dataset: nl2repobench/nl2repobench
+  # The dataset's content digest. Resolved and re-pinned at launch, and
+  # recorded in `jobs/<job>/benchmark.json` alongside the selected tasks.
+  ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
+  image_mirror:
+    - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
+      pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+
+agent:
+  import_path: evaluation_platform.terminus_agent:TerminusAgent
+  n_concurrent: 10
+  hyperparameters:
+    max_turns: 58
+    # Terminus ships a JSON and an XML tool-call format and defaults to JSON.
+    parser_name: json
+    # A task that writes a whole repository is long. With this off, the
+    # alternative to compressing the history is failing at the context ceiling.
+    enable_summarize: true
+    request_extra:
+      reasoning:
+        enabled: false

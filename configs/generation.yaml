@@ -5,6 +5,14 @@
 # configuration rejects these three names with a pointer back here. Every
 # configuration in this directory reads this file, whichever solution it runs,
 # so the three values below are the three values each arm sends.
+#
+# A configuration may name a different sampling file with `sampling.file`, and
+# one does: `humaneval-self-collaboration.yaml` reproduces a published
+# experiment and has to sample the way that experiment did. That is a second
+# *comparison*, not a second place to set the values for this one — every arm
+# of a comparison still reads one file, and which file a run read is recorded
+# in its archived setup. See `configs/generation-humaneval.yaml`.
 temperature: 0.2
 top_p: 0.95
-max_tokens: 131100 # The maximum number of output tokens as defined by the provider baidu
+#max_tokens: 131072 # The maximum number of output tokens as defined by the provider baidu
+max_tokens: 8192 # The maximum number of output tokens as defined by the provider baidu

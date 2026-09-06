@@ -10,9 +10,13 @@ import pytest
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evaluation_platform.experiment_config import ConfigurationError
+from evaluation_platform.experiment_config import (
+    ConfigurationError,
+    load_generation_config,
+)
 from evaluation_platform.self_collaboration_agent import (
     HYPERPARAMETERS_PATH,
+    HUMANEVAL_PACKAGES,
     OPENAI_PACKAGE,
     SELF_COLLABORATION_COMMIT,
     SELF_COLLABORATION_REPOSITORY,
@@ -123,7 +127,11 @@ def test_run_uploads_the_configured_hyperparameters_for_the_runner(tmp_path):
     assert hyperparameters["test_command"] == "pytest -q"
     # Defaults are filled in, so the uploaded file is the complete setup.
     assert hyperparameters["analyst_steps"] == 10
-    assert hyperparameters["temperature"] == 0.0
+    # Sampling reaches the runner from the one file that sets it, rather than
+    # from a default of the agent's own. Checked against that file rather than
+    # against a literal: the value there is a choice the comparison makes and
+    # may change, and what this test is for is that the choice arrives.
+    assert hyperparameters["temperature"] == load_generation_config().temperature
 
 
 def test_agent_rejects_a_hyperparameter_value_the_runner_cannot_use(tmp_path):
@@ -633,3 +641,81 @@ def _intent_to_add(workspace, *diff_arguments):
         text=True,
         check=True,
     ).stdout
+
+
+def test_the_humaneval_shape_runs_the_authors_own_entry_point(tmp_path):
+    """Which runner a shape selects, and what it installs to get there.
+
+    The two shapes are two entry points of the same tool, not two settings of
+    one, so the shape has to reach the container as a different runner. It also
+    has to reach it with the tool's declared dependencies: `run_humaneval.py`
+    imports `datasets` and `tqdm` at module scope, and without them the import
+    fails before any of the method runs.
+    """
+    environment = RecordingEnvironment()
+    agent = SelfCollaborationAgent(
+        logs_dir=tmp_path, task_shape="humaneval", max_rounds=4, max_steps=10
+    )
+
+    asyncio.run(agent.install(cast(BaseEnvironment, cast(object, environment))))
+    asyncio.run(
+        agent.run(
+            "Implement has_close_elements",
+            cast(BaseEnvironment, cast(object, environment)),
+            AgentContext(),
+        )
+    )
+
+    commands = "\n".join(command["command"] for command in environment.commands)
+    for package in HUMANEVAL_PACKAGES:
+        assert package in commands
+    assert "run_humaneval_self_collaboration.py" in environment.commands[-1]["command"]
+    assert "run_self_collaboration.py" not in environment.commands[-1]["command"]
+
+    uploaded = [target for _, target in environment.uploads]
+    assert "/installed-agent/run_humaneval_self_collaboration.py" in uploaded
+
+    hyperparameters = json.loads(
+        dict(zip(uploaded, environment.upload_contents))[HYPERPARAMETERS_PATH]
+    )
+    assert hyperparameters["max_rounds"] == 4
+    assert hyperparameters["max_steps"] == 10
+
+
+def test_the_repository_shape_installs_nothing_the_humaneval_one_needs(tmp_path):
+    """The dependencies of an entry point this shape does not run.
+
+    `datasets` pulls pyarrow and pandas behind it, which is a fixed cost per
+    trial. The repository shape's code path never imports it, so it is not
+    installed there.
+    """
+    environment = RecordingEnvironment()
+    agent = SelfCollaborationAgent(logs_dir=tmp_path)
+
+    asyncio.run(agent.install(cast(BaseEnvironment, cast(object, environment))))
+
+    commands = "\n".join(command["command"] for command in environment.commands)
+    assert OPENAI_PACKAGE in commands
+    for package in HUMANEVAL_PACKAGES:
+        assert package not in commands
+
+
+def test_the_humaneval_shape_writes_where_the_benchmark_grades(tmp_path, monkeypatch):
+    """The one place the harness has to put the tool's answer.
+
+    `run_task` returns the generated code and leaves it in a working directory
+    of its own; the benchmark grades `/workspace/solution.py`. A run whose Coder
+    produced nothing writes no file at all, so that 'no answer' and 'an answer
+    that does not parse' stay different findings in the verifier's report.
+    """
+    from evaluation_platform import run_humaneval_self_collaboration as runner
+
+    workspace = tmp_path / "workspace"
+    monkeypatch.setattr(runner, "WORKSPACE", workspace)
+    monkeypatch.setattr(runner, "SOLUTION_PATH", workspace / "solution.py")
+
+    runner._write_solution("def has_close_elements(numbers, threshold):\n    return True\n")
+    assert (workspace / "solution.py").exists()
+
+    runner._write_solution("   \n")
+    assert (workspace / "solution.py").read_text(encoding="utf-8").startswith("def ")

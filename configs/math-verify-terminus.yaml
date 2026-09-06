@@ -38,8 +38,8 @@ description: >-
 
 run:
   jobs_dir: jobs
-  n_attempts: 1
-  n_concurrent_trials: 1
+  n_attempts: 5
+  n_concurrent_trials: 5
   artifacts:
     - /workspace
 
@@ -90,7 +90,7 @@ model:
 
 agent:
   import_path: evaluation_platform.terminus_agent:TerminusAgent
-  n_concurrent: 1
+  n_concurrent: 5
   hyperparameters:
     # Terminus bounds itself at a million turns, which is no bound at all, so
     # the number here is the experiment's. It is chosen for budget parity

@@ -79,3 +79,8 @@ $RECYCLE.BIN/
 # Do NOT ignore .gitmodules — it must be committed.
 # Each submodule has its own .gitignore; this root file does not
 # automatically apply rules inside submodule repositories.
+# Generated benchmark task packages. HumanEval is not in Harbor's registry,
+# so scripts/build_humaneval_tasks.py generates its 164 task packages from the
+# digest-pinned data in benchmarks/humaneval/data. Generated, not source:
+# regenerate it rather than editing or committing it.
+benchmarks/humaneval/tasks/

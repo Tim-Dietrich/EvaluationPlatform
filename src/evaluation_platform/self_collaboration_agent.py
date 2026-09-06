@@ -28,11 +28,36 @@ SELF_COLLABORATION_REPOSITORY = (
 TASK_INSTRUCTION_PATH = "/installed-agent/task-instruction.md"
 HYPERPARAMETERS_PATH = "/installed-agent/hyperparameters.json"
 TASK_WORKSPACE = "/workspace"
+
+# The tool's two entry points, and the runner that drives each. `repository`
+# is `core.agent.SelfCollabSession`, which the authors' SWE scripts use;
+# `humaneval` is `run_humaneval.py`, which is what `bash run.sh` runs and so is
+# the path behind the paper's HumanEval figures. `experiment_config` describes
+# how the two differ and which hyperparameters reach which.
+RUNNERS = {
+    "repository": "run_self_collaboration.py",
+    "humaneval": "run_humaneval_self_collaboration.py",
+}
 # Git asks a terminal for credentials it was not given, and a task
 # container has no terminal to ask.
 GIT_NON_INTERACTIVE = {"GIT_TERMINAL_PROMPT": "0"}
 USAGE_FILENAME = "model-usage.json"
+
+# The tool's dependencies, pinned. `requirements.txt` at the evaluated commit
+# asks for `openai>=1.0`, `datasets`, `tqdm`, `docker` and `swebench`, and its
+# own Dockerfile installs the file wholesale. Only the first three are
+# installed here: `docker` and `swebench` belong to `run_swe*.py`, an entry
+# point no configuration of this platform runs, and `swebench` is large.
+#
+# The versions are pinned where upstream leaves them open, for the reason the
+# tool's own commit is pinned: a replication that silently resolves a different
+# `datasets` next month is a replication with an unrecorded variable.
 OPENAI_PACKAGE = "openai==2.54.0"
+# `run_humaneval.py` imports `datasets` and `tqdm` at module scope for the CLI
+# loop in its `main()`. The runner calls `run_task` and never `main()`, so
+# neither package is reached at run time — but the import is, and the tool's
+# environment is reproduced rather than worked around.
+HUMANEVAL_PACKAGES = ("datasets==5.0.1", "tqdm==4.70.0")
 
 
 class SelfCollaborationAgent(BaseInstalledAgent):
@@ -65,6 +90,14 @@ class SelfCollaborationAgent(BaseInstalledAgent):
         SELF_COLLABORATION.reject_foreign(kwargs)
         super().__init__(*args, **kwargs)
         self.hyperparameters = SELF_COLLABORATION.resolve(hyperparameters) | self.generation
+        self.task_shape = self.hyperparameters["task_shape"]
+        # The HumanEval entry point returns its generated code and writes no
+        # session history, so there is nothing for the converter to read. Said
+        # here rather than left to fail quietly: a trajectory that is absent
+        # because the code path produces none is different from one that is
+        # absent because the conversion broke.
+        if self.task_shape != "repository":
+            self.SUPPORTS_ATIF = False
         # Kept from `run` so that the trajectory written afterwards can open on
         # the task the solution was given. The session history the tool writes
         # does not record it, and the conversion happens after the container is
@@ -77,9 +110,15 @@ class SelfCollaborationAgent(BaseInstalledAgent):
 
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(environment, ("git",))
+        packages = [OPENAI_PACKAGE]
+        if self.task_shape == "humaneval":
+            packages.extend(HUMANEVAL_PACKAGES)
         await self.exec_as_root(
             environment,
-            command=f"python -m pip install --no-cache-dir '{OPENAI_PACKAGE}'",
+            command=(
+                "python -m pip install --no-cache-dir "
+                + " ".join(f"'{package}'" for package in packages)
+            ),
         )
         await self.exec_as_agent(
             environment,
@@ -98,8 +137,12 @@ class SelfCollaborationAgent(BaseInstalledAgent):
             # reporting in seconds that it could not read the repository.
             env=GIT_NON_INTERACTIVE,
         )
+        # Both runners are uploaded whichever shape runs: the HumanEval one
+        # imports the shared usage wrapper from the other, and a module that
+        # is present but unused costs nothing.
         for module in (
                 "run_self_collaboration.py",
+                "run_humaneval_self_collaboration.py",
                 "model_usage.py",
                 "model_routing.py",
                 "failure_categories.py",
@@ -135,10 +178,11 @@ class SelfCollaborationAgent(BaseInstalledAgent):
                 hyperparameters_source,
                 HYPERPARAMETERS_PATH,
             )
+            runner = RUNNERS[self.task_shape]
             await self.exec_as_agent(
                 environment,
                 command=(
-                    "python -u /installed-agent/run_self_collaboration.py "
+                    f"python -u /installed-agent/{runner} "
                     "2>&1 | tee /logs/agent/self-collaboration.log"
                 ),
                 env={

@@ -396,3 +396,101 @@ def test_the_benchmark_record_states_what_a_trial_asks_for(tmp_path):
         "cpus": 2,
         "memory_mb": 8192,
     }
+
+
+def write_local_task(directory: Path, name: str) -> Path:
+    """A minimal valid Harbor task package, as the HumanEval generator writes."""
+    task_dir = directory / name
+    (task_dir / "environment").mkdir(parents=True)
+    (task_dir / "tests").mkdir()
+    (task_dir / "environment" / "Dockerfile").write_text(
+        "FROM python:3.11-slim\n", encoding="utf-8"
+    )
+    (task_dir / "tests" / "test.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+    (task_dir / "instruction.md").write_text("Do the thing.\n", encoding="utf-8")
+    (task_dir / "task.toml").write_text(
+        'schema_version = "1.4"\n\n'
+        "[environment]\nbuild_timeout_sec = 600.0\ncpus = 1\nmemory_mb = 2048\n",
+        encoding="utf-8",
+    )
+    return task_dir
+
+
+def test_a_benchmark_harbor_does_not_publish_is_taken_from_a_directory(tmp_path):
+    """The escape hatch HumanEval needs, and the only benchmark that uses it.
+
+    Harbor's registry carries no HumanEval, so its tasks are generated from the
+    published data and named by path. Selection still goes through Harbor's own
+    dataset configuration, so a local benchmark and a registry one cannot
+    disagree about what `task_names` means.
+    """
+    for name in ("HumanEval_0", "HumanEval_1", "HumanEval_2"):
+        write_local_task(tmp_path, name)
+
+    preparation = benchmark_module.prepare(
+        BenchmarkSettings(path=str(tmp_path), task_names=["HumanEval_1*"]),
+        log=lambda message: None,
+    )
+
+    assert preparation.task_names == ["HumanEval_1"]
+    # Nothing to mirror: a task that builds its own image names none.
+    assert preparation.images == []
+    assert preparation.demand == TrialDemand(cpus=1, memory_mb=2048)
+
+
+def test_a_generated_benchmark_is_pinned_by_a_digest_over_its_tasks(tmp_path):
+    """What a registry ref gives a benchmark, and a directory has to compute.
+
+    The digest is what makes a HumanEval result traceable to the tasks that
+    produced it, so it has to move when any of them does.
+    """
+    write_local_task(tmp_path, "HumanEval_0")
+    settings = BenchmarkSettings(path=str(tmp_path))
+
+    first = benchmark_module.prepare(settings, log=lambda message: None)
+    again = benchmark_module.prepare(settings, log=lambda message: None)
+    assert first.resolved_ref == again.resolved_ref
+    assert first.resolved_ref.startswith("sha256:")
+
+    (tmp_path / "HumanEval_0" / "instruction.md").write_text(
+        "Do a different thing.\n", encoding="utf-8"
+    )
+    changed = benchmark_module.prepare(settings, log=lambda message: None)
+    assert changed.resolved_ref != first.resolved_ref
+
+
+def test_a_local_digest_is_archived_but_never_sent_to_harbor(tmp_path):
+    """Harbor cannot resolve a digest this project computed for itself.
+
+    Sending one would be a reference to a version no registry knows, so the
+    pin lives in the archived setup — where it is read by a person comparing
+    two runs — and the job is given the directory alone.
+    """
+    write_local_task(tmp_path, "HumanEval_0")
+    preparation = benchmark_module.prepare(
+        BenchmarkSettings(path=str(tmp_path)), log=lambda message: None
+    )
+    pinned = BenchmarkSettings(path=str(tmp_path), ref=preparation.resolved_ref)
+
+    assert pinned.to_harbor_dataset() == {"path": str(tmp_path)}
+    assert pinned.to_snapshot()["ref"] == preparation.resolved_ref
+
+
+def test_a_directory_with_no_task_packages_is_reported_before_the_run(tmp_path):
+    """The failure mode of a benchmark that has to be generated first."""
+    with pytest.raises(BenchmarkError) as error:
+        benchmark_module.prepare(
+            BenchmarkSettings(path=str(tmp_path)), log=lambda message: None
+        )
+
+    assert "build_humaneval_tasks" in str(error.value)
+
+
+def test_a_benchmark_path_that_does_not_exist_says_how_to_make_it():
+    with pytest.raises(BenchmarkError) as error:
+        benchmark_module.prepare(
+            BenchmarkSettings(path="benchmarks/humaneval/no-such-directory"),
+            log=lambda message: None,
+        )
+
+    assert "build_humaneval_tasks" in str(error.value)

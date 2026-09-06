@@ -1,0 +1,138 @@
+name: swe-bench-pro-single-shot
+description: >-
+  The first run of this platform against SWE-Bench-Pro, and a smoke test rather
+  than a measurement: one task, one attempt, to establish that the benchmark
+  resolves, its image builds, the baseline installs and answers inside it, and
+  ScaleAI's own test script grades what comes out. Read the reward as evidence
+  that the apparatus works, not as a score.
+
+  SWE-Bench-Pro asks a different question from NL2RepoBench. There is no empty
+  workspace and no specification of a library to write: the task's image ships a
+  repository at /app checked out at a commit just before a real pull request,
+  and the instruction is that pull request's description. The reward is one or
+  zero — every one of the task's fail-to-pass and pass-to-pass tests passes, or
+  it does not — rather than NL2RepoBench's passing fraction, so a single task's
+  result carries correspondingly less information.
+
+  That is what `agent.hyperparameters.task_shape` selects, and the whole of what
+  it changes about this arm. It is still one request: no plan, no roles, no test
+  run, and no second look at the result.
+
+run:
+  jobs_dir: jobs
+  # A smoke test. The benchmark's 731 tasks and the repeats a measurement needs
+  # come after this run says the pipeline works.
+  n_attempts: 1
+  n_concurrent_trials: 2
+  # No `artifacts`. On NL2RepoBench the workspace *is* the answer and is
+  # archived whole; here the workspace is the ansible repository, several
+  # gigabytes of it, with a handful of files changed. What the run did to it is
+  # kept as a diff at /logs/agent/single-shot/patch.diff, beside the reply that
+  # produced it.
+
+benchmark:
+  dataset: scale-ai/swe-bench-pro
+  ref: sha256:88411d32ff27e53a4c1a7e29f0c2aeba180c8e5d60f221cab5ed56325f33549d
+  # One task out of 731, chosen for what a smoke test needs to see rather than
+  # for difficulty — the benchmark grades every task `medium`, and the run is
+  # not measuring anything yet.
+  #
+  # This is the second task to hold the slot, and why the first one lost it is
+  # worth writing down, because it is a trap this benchmark sets more than once.
+  #
+  # The first was `instance_ansible__ansible-11c1777d...`, picked for the
+  # cleanest reward signal in the benchmark: one fail-to-pass test, no
+  # pass-to-pass tests, one patched file, and an instruction naming the file to
+  # change. Ten attempts scored zero, all ten for the same reason. Every one
+  # implemented the right function in the right class and was called by the
+  # test; every one called `self.module.run_command(args, errors=...)`, which is
+  # how all six existing calls in the file the model was shown are written, and
+  # the hidden test mocks `run_command(self, command)` with no such parameter.
+  # The gold patch is the only call in that file that omits it. Nothing
+  # observable from inside the task distinguishes the two, so the task grades
+  # whether an arm can run the test and read the TypeError — which is exactly
+  # the feedback loop this arm forgoes by construction. As a measurement of
+  # Single-Shot that is sound; as a smoke test it cannot tell a working pipeline
+  # from a broken one, because it returns zero either way. 106 of the
+  # benchmark's 266 Python tasks have mock- or patch-based tests that can pin an
+  # unobservable call signature like this.
+  #
+  # This one is drawn from the other 160, whose tests call the code under test
+  # directly. `test_map_data` is three parametrized cases that pass a dictionary
+  # in and compare the dictionary that comes out — no mock, and no signature to
+  # guess. It has three fail-to-pass tests and no pass-to-pass tests, so the
+  # reward is still clean; the gold patch is a new 146-line file rather than an
+  # edit to a large one, so a reply cannot fail by mangling code it was shown;
+  # and the instruction specifies the whole of the field mapping the test
+  # checks. A zero here is a finding about the arm. A zero on the task before it
+  # was a finding about the task.
+#  task_names:
+#    - scale-ai/instance_internetarchive__openlibrary-f8cc11d9c1575fdba5ac66aee0befca970da8d64-v13642507b4fc1f8d234172bf8129942da2c2ca26
+  # No `image_mirror`. SWE-Bench-Pro's tester images are `jefzda/sweap-images`
+  # on Docker Hub and are pullable as published, which is the rule rather than
+  # the exception; NL2RepoBench's private mirror is why the key exists at all.
+
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  # Byte-identical to the `model` block of `configs/nl2repobench-single-shot.yaml`,
+  # deliberately: the two benchmarks are meant to be read side by side, and a
+  # difference between them should be a difference in benchmark rather than in
+  # which of OpenRouter's servers answered or at what precision. The reasoning
+  # behind these two endpoints is written out there.
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+
+agent:
+  import_path: evaluation_platform.single_shot_agent:SingleShotAgent
+  n_concurrent: 2
+  hyperparameters:
+    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
+    # It is set for every arm at once in `configs/generation.yaml`, so that a
+    # difference between this run and the arms beside it is a difference in
+    # method. Stating one of the three here is rejected before Docker starts.
+
+    # Which question the benchmark is asking. `edit` puts the repository in
+    # front of the one request and asks for the files that change; `repository`,
+    # the default, is NL2RepoBench's empty workspace and whole project. The
+    # contract each one is answered under is fixed in `run_single_shot.py` and
+    # recorded by digest, in the way this baseline's prompt always has been —
+    # what a configuration selects is which benchmark it is running, not what
+    # the model is told about how to solve anything.
+    task_shape: edit
+
+    # Where SWE-Bench-Pro's images put the repository, and so where its tests
+    # look for the answer. NL2RepoBench's `/workspace` is the default.
+    workspace: /app
+
+    # How much of that repository the one request may carry, in characters.
+    # ~120k characters is on the order of 30k tokens, which sits inside the
+    # model's context beside the 131 100-token output ceiling the shared
+    # sampling file sets. What fills it is assembled mechanically — the files
+    # the instruction names, then a listing of everything the repository tracks,
+    # the listing losing detail rather than coverage as the budget runs out —
+    # and what the budget cut is recorded in the run's `resolved-setup.json`.
+    # ansible is a large repository, so expect that listing to arrive rolled up
+    # to directories rather than as paths.
+    context_chars: 120000
+
+    # One request means one chance, and a throttled provider would otherwise
+    # cost the whole task. These attempts re-send the same prompt; they are not
+    # a second look at the answer, and how many were needed is recorded.
+    request_attempts: 3
+    # How long one attempt waits. Three attempts of ten minutes fit inside
+    # SWE-Bench-Pro's 3 000-second agent timeout with room to spare.
+    request_timeout_seconds: 600
+    # Pinned rather than inherited, and to the same value as every other arm:
+    # left unset, how much the model reasons is the provider's default for it at
+    # that moment, set outside the experiment and free to change between runs.
+    # What actually happened is recorded as `reasoning_tokens` in the run's
+    # model usage.
+    request_extra:
+      reasoning:
+        enabled: false

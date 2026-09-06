@@ -1,0 +1,25 @@
+{
+  "note": "The two data files this benchmark is generated from, pinned by the sha256 of their decompressed contents. Both are stored gzipped with mtime=0 so the vendored bytes are reproducible. Nothing here is modified from its source; scripts/build_humaneval_tasks.py verifies these digests before it generates anything.",
+  "sources": [
+    {
+      "file": "HumanEval.jsonl.gz",
+      "sha256": "1d49078ba3e2b196b9344535bef34a43021f038fad9561d6ee7c53450609a6a2",
+      "bytes": 214438,
+      "records": 164,
+      "origin": "https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz",
+      "retrieved": "2026-09-05",
+      "license": "MIT (OpenAI)",
+      "why": "The canonical HumanEval problems. Harbor's registry carries no HumanEval dataset, so the benchmark is generated here from its published source rather than resolved as a dependency."
+    },
+    {
+      "file": "HumanEval_test_case_ET.jsonl.gz",
+      "sha256": "c9d9ccd7e299897a423a013ddd59e248b1befb68068d9e74811f1cfad49be0c5",
+      "bytes": 1321260,
+      "records": 164,
+      "origin": "data/HumanEval_test_case_ET.jsonl, in Self-collaboration-Code-Generation at commit a6490a9d0d32f3238cc5b776d2de8d2134d2b138",
+      "retrieved": "2026-09-05",
+      "license": "see the upstream repository",
+      "why": "HumanEval-ET's extended test cases, which the paper reports alongside HumanEval. Taken from the copy the authors evaluate against so that the ET number is graded on the same cases they used. Vendored here rather than read from the tool at run time, so that the benchmark does not depend on the solution it grades."
+    }
+  ]
+}

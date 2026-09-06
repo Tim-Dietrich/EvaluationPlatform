@@ -75,17 +75,29 @@ def test_routing_is_pinned_beside_the_model_it_qualifies():
     blocks to agree across configurations is the test that keeps every arm on
     one server.
     """
-    pinned = {}
+    pinned: dict[str, dict[str, str]] = {}
     for path in sorted((ROOT / "configs").glob("*.yaml")):
         # The sampling parameters live beside the experiment configurations and
         # are not one: they set three values for every arm and name no model.
-        if path.name == GENERATION_CONFIG_PATH.name:
+        # There is more than one such file, so they are told apart by shape.
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if "model" not in document:
             continue
         config = load_experiment_config(path, ENVIRONMENT)
         assert config.model_routing, f"{path.name} leaves the server to price"
-        pinned[path.name] = config.model_routing
+        pinned.setdefault(config.model_name, {})[path.name] = repr(
+            config.model_routing
+        )
 
-    assert len(set(map(repr, pinned.values()))) == 1, pinned
+    # Grouped by model, because a routing tag names an endpoint *of a model*:
+    # `baidu/fp8` is not an endpoint that `openai/gpt-3.5-turbo-0613` has, and
+    # a comparison run on a different model has to choose its servers again.
+    # What must not vary is the routing within one model, since that is where
+    # two arms could silently run at different precision while both records
+    # said the model was held constant.
+    assert pinned, "no experiment configurations were found"
+    for model, arms in pinned.items():
+        assert len(set(arms.values())) == 1, (model, arms)
 
 
 def test_every_arm_is_told_the_same_way(tmp_path):

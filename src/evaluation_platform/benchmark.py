@@ -5,6 +5,14 @@ so a benchmark enters this repository as a dependency rather than as
 checked-in task files: an experiment configuration names the dataset and which
 of its tasks to run, and Harbor downloads and pins the rest.
 
+That covers every benchmark Harbor publishes, and one it does not. HumanEval
+is in neither of Harbor's registries, so `benchmark.path` names a directory of
+task packages instead of a dataset — generated from HumanEval's published data
+by `scripts/build_humaneval_tasks.py`, and pinned by `local_tree_digest`
+rather than by a registry ref. Selection still goes through Harbor's own
+dataset configuration either way, so a local benchmark and a registry one
+cannot disagree about what `task_names` means.
+
 What that leaves is one gap, and it is about images rather than tasks.
 NL2RepoBench's published tasks name their tester images on a private mirror
 that needs credentials this project does not have, while the identical images
@@ -25,6 +33,7 @@ before the run starts rather than discovered hours into it.
 """
 
 import asyncio
+import hashlib
 import subprocess
 import tomllib
 from collections.abc import Callable, Iterable
@@ -66,18 +75,43 @@ class ImageMirrorRule:
 
 @dataclass(frozen=True)
 class BenchmarkSettings:
-    """Which benchmark a run uses, and which of its tasks."""
+    """Which benchmark a run uses, and which of its tasks.
 
-    dataset: str
+    A benchmark is named one of two ways, and never both. `dataset` is an
+    `org/name` dataset in Harbor's registry, which is how every benchmark
+    reaches this project that Harbor publishes. `path` is a directory of task
+    packages on this machine, which is how one reaches it that Harbor does
+    not: HumanEval is in neither of Harbor's registries, so it is generated
+    from its published source by `scripts/build_humaneval_tasks.py` and named
+    here by path. What that gives up is the registry's digest, and
+    `local_tree_digest` is what gives it back.
+    """
+
+    dataset: str | None = None
+    path: str | None = None
     ref: str | None = None
     task_names: list[str] = field(default_factory=list)
     exclude_task_names: list[str] = field(default_factory=list)
     n_tasks: int | None = None
     image_mirror: list[ImageMirrorRule] = field(default_factory=list)
 
+    @property
+    def label(self) -> str:
+        """How this benchmark is named in a log line or a record."""
+        return self.dataset or self.path or ""
+
+    @property
+    def is_local(self) -> bool:
+        return self.path is not None
+
     def to_harbor_dataset(self) -> dict[str, Any]:
-        dataset: dict[str, Any] = {"name": self.dataset}
-        if self.ref is not None:
+        dataset: dict[str, Any] = (
+            {"path": self.path} if self.is_local else {"name": self.dataset}
+        )
+        # A local dataset's `ref` is a digest of the generated tree that this
+        # project computes and records. Harbor has no way to resolve one, so
+        # it is archived in the snapshot below and never sent to the job.
+        if self.ref is not None and not self.is_local:
             dataset["ref"] = self.ref
         if self.task_names:
             dataset["task_names"] = list(self.task_names)
@@ -88,7 +122,9 @@ class BenchmarkSettings:
         return dataset
 
     def to_snapshot(self) -> dict[str, Any]:
-        snapshot: dict[str, Any] = {"dataset": self.dataset}
+        snapshot: dict[str, Any] = (
+            {"path": self.path} if self.is_local else {"dataset": self.dataset}
+        )
         if self.ref is not None:
             snapshot["ref"] = self.ref
         if self.task_names:
@@ -191,14 +227,14 @@ async def prepare_async(
 ) -> BenchmarkPreparation:
     resolved_ref, tasks = await _resolve_tasks(settings)
     log(
-        f"Benchmark {settings.dataset} resolved to {resolved_ref or 'latest'} "
+        f"Benchmark {settings.label} resolved to {resolved_ref or 'latest'} "
         f"with {len(tasks)} task(s) selected."
     )
 
     images = await _mirror_images(tasks, settings.image_mirror, log, pull_concurrency)
 
     return BenchmarkPreparation(
-        dataset=settings.dataset,
+        dataset=settings.label,
         resolved_ref=resolved_ref,
         task_names=[name for name, _ in tasks],
         images=images,
@@ -340,10 +376,13 @@ async def _resolve_tasks(
     from harbor.tasks.client import TaskClient
 
     dataset = DatasetConfig(**settings.to_harbor_dataset())
+    if settings.is_local:
+        return await _resolve_local_tasks(settings, dataset)
     if not dataset.is_package():
         raise BenchmarkError(
             f"Benchmark {settings.dataset!r} is not a registry dataset. Use an "
-            "'org/name' dataset published to Harbor's registry."
+            "'org/name' dataset published to Harbor's registry, or name a "
+            "directory of task packages with 'benchmark.path'."
         )
 
     try:
@@ -361,6 +400,65 @@ async def _resolve_tasks(
     names = [task_config.name or "" for task_config in task_configs]
     # `get_task_configs` resolves a floating ref to the dataset's digest.
     return dataset.ref, list(zip(names, downloads.paths, strict=True))
+
+
+async def _resolve_local_tasks(
+        settings: BenchmarkSettings,
+        dataset: Any,
+) -> tuple[str | None, list[tuple[str, Path]]]:
+    """Select tasks from a directory of task packages on this machine.
+
+    Harbor's own dataset configuration still does the selecting, so
+    `task_names`, `exclude_task_names` and `n_tasks` mean here exactly what
+    they mean for a registry dataset. Nothing is downloaded — the packages are
+    already on disk — and what stands in for a registry ref is a digest over
+    the tree, so a result still records which tasks produced it.
+    """
+    assert settings.path is not None
+    root = Path(settings.path).expanduser()
+    if not root.is_dir():
+        raise BenchmarkError(
+            f"Benchmark path {settings.path!r} is not a directory. A local "
+            "benchmark is a directory of Harbor task packages; HumanEval's is "
+            "generated by 'python scripts/build_humaneval_tasks.py'."
+        )
+
+    try:
+        task_configs = await dataset.get_task_configs()
+    except ValueError as error:
+        raise BenchmarkError(str(error)) from error
+
+    if not task_configs:
+        raise BenchmarkError(
+            f"No valid Harbor task packages under {settings.path!r}. A task "
+            "package is a directory with a task.toml, an instruction.md, an "
+            "environment/ and a tests/. HumanEval's are generated by "
+            "'python scripts/build_humaneval_tasks.py'."
+        )
+
+    tasks = [(config.path.name, config.path) for config in task_configs]
+    return f"sha256:{local_tree_digest(root)}", tasks
+
+
+def local_tree_digest(tasks_dir: Path) -> str:
+    """A digest over a directory of task packages, standing in for a ref.
+
+    Every file's path and bytes go in, in sorted order. A registry dataset
+    carries a digest that pins what a run graded against; a generated one has
+    to compute its own, and this is it — recorded in the run's `benchmark.json`
+    and in its archived setup. `scripts/build_humaneval_tasks.py` prints the
+    same figure when it generates, so a tree that has been edited by hand
+    since is visible as a digest that no longer matches.
+    """
+    accumulator = hashlib.sha256()
+    for path in sorted(tasks_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        accumulator.update(path.relative_to(tasks_dir).as_posix().encode("utf-8"))
+        accumulator.update(b"\0")
+        accumulator.update(path.read_bytes())
+        accumulator.update(b"\0")
+    return accumulator.hexdigest()
 
 
 def _images_named_by(task_dir: Path) -> list[str]:
@@ -470,7 +568,15 @@ def _docker(
         result = subprocess.run(
             ["docker", *arguments],
             capture_output=True,
-            text=True,
+            # Docker writes UTF-8, but decoding by the locale's codepage is
+            # what `text=True` alone would do, and on Windows that codepage
+            # cannot represent the braille glyphs `docker pull` draws its
+            # progress with. The decode runs in subprocess's reader thread,
+            # where failing it kills the thread and empties the captured
+            # output instead of failing the call: a pull that worked would
+            # print a traceback, and one that failed would report no reason.
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except FileNotFoundError as error:

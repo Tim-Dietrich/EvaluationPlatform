@@ -1,0 +1,4 @@
+# The sampling parameters for the HumanEval replication, and for nothing else.
+temperature: 0.0
+top_p: 0.95
+max_tokens: 512

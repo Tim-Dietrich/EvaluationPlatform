@@ -87,6 +87,13 @@ class AgentHyperparameters:
     # OpenAI-compatible provider by three of the solutions here, and one of
     # eight literals accepted by a fourth.
     choices: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Hyperparameters that one `task_shape` cannot carry, keyed by that shape.
+    # A solution with two entry points has two sets of knobs, and the entry
+    # point a shape selects may have nowhere to put one of them. Harbor would
+    # forward it, the runner would not read it, and the archived setup would
+    # record it as though it had decided something — so it is refused here
+    # instead, with the reason attached.
+    shape_conflicts: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def resolve(self, values: Mapping[str, Any]) -> dict[str, Any]:
         """Fill in defaults, validate, and reject names the runner would ignore.
@@ -113,12 +120,37 @@ class AgentHyperparameters:
                 f"{', '.join(sorted(unknown))}. Known hyperparameters: "
                 f"{', '.join(sorted(self.types))}."
             )
-        return dict(self.defaults) | {
+        resolved = dict(self.defaults) | {
             name: _coerce_hyperparameter(
                 name, value, self.types[name], self.choices.get(name)
             )
             for name, value in values.items()
         }
+        self._reject_shape_conflicts(values, resolved)
+        return resolved
+
+    def _reject_shape_conflicts(
+            self,
+            stated: Mapping[str, Any],
+            resolved: Mapping[str, Any],
+    ) -> None:
+        """Refuse a knob the selected entry point has nowhere to put.
+
+        Only what the configuration *states* is refused. A default that this
+        shape ignores is inert rather than wrong, and saying so belongs in the
+        run's record rather than in an error.
+        """
+        shape = resolved.get("task_shape")
+        conflicting = sorted(
+            set(stated) & set(self.shape_conflicts.get(shape, ()))
+        )
+        if conflicting:
+            raise ConfigurationError(
+                f"{', '.join(conflicting)} cannot be set when "
+                f"{self.solution} runs with task_shape {shape!r}: that entry "
+                "point has nowhere to send them, so the value would be "
+                "recorded in the run's setup and then ignored."
+            )
 
     def reject_foreign(self, names: Iterable[str]) -> None:
         """Reject names that belong to a different solution's schema.
@@ -168,22 +200,58 @@ class AgentHyperparameters:
 # without a reasoning setting the provider's own default applies. Both are
 # choices a configuration has to make deliberately, and both are recorded
 # either way.
+#
+# The tool ships two entry points, and which one a run uses is what
+# `task_shape` selects. They are not variants of one code path: they define
+# their roles differently, give them different tools, and mean different
+# things by a Tester, so a run has to say which it is.
+#
+# `repository` is `core.agent.SelfCollabSession`, which the authors' `run.sh`
+# never invokes and their SWE scripts do. Its Analyst is a localizer that
+# explores an existing repository and names the files to change, its Coder
+# edits them with `edit_file` and is shown its own `git diff` between rounds,
+# and its Tester runs a shell command the caller supplies. That is the shape
+# NL2RepoBench is answered in.
+#
+# `humaneval` is `run_humaneval.py`, which is what `bash run.sh` runs and so is
+# the entry point behind the paper's HumanEval figures. Its Analyst is a
+# requirement analyst making one plain call with no tools, its Coder writes
+# `solution.py` with `write_file`, and its Tester is a model that writes its
+# own `check(candidate)` cases and runs them — the benchmark's real tests are
+# never in the loop. Its rounds are counted by `max_rounds` and its Coder's
+# step budget by `max_steps`; `analyst_steps` and `coder_steps` do not reach
+# it, and `test_command` is refused outright rather than silently dropped,
+# since a Tester that writes its own tests has nothing to run.
+SELF_COLLABORATION_TASK_SHAPES = ("repository", "humaneval")
+
 SELF_COLLABORATION = AgentHyperparameters(
     solution="Self-Collaboration",
     label="self-collaboration",
     types={
+        # Which of the tool's two entry points runs; see above.
+        "task_shape": str,
         "max_rounds": int,
+        # `repository` only: the Analyst's and the Coder's step budgets.
         "analyst_steps": int,
         "coder_steps": int,
+        # `humaneval` only: the Coder's step budget on that entry point. It has
+        # no default, because the two shapes disagree about what it should be
+        # and a configuration that runs this shape should say the number out
+        # loud rather than inherit one chosen for the other.
+        "max_steps": int,
+        # `repository` only: what the Tester runs between Coder rounds.
         "test_command": str,
         "reasoning_effort": str,
         "request_extra": dict,
     },
     defaults={
+        "task_shape": "repository",
         "max_rounds": 3,
         "analyst_steps": 10,
         "coder_steps": 15,
     },
+    choices={"task_shape": SELF_COLLABORATION_TASK_SHAPES},
+    shape_conflicts={"humaneval": ("test_command",)},
 )
 
 # CodeTeam: competing Architects propose software design sketches, a CTO
@@ -308,6 +376,22 @@ CODE_S = AgentHyperparameters(
 # is recorded as truncated, and counted as `output_limit_exhausted`, rather than
 # graded silently — because a baseline that ran out of output tokens and one
 # that did not know the answer are different findings.
+#
+# What the three settings below have in common with the two beside them, and
+# not with a prompt, is that the benchmark decides them rather than the
+# experimenter. A benchmark that hands over an empty directory and a
+# specification is a different question from one that hands over a repository
+# and a bug report, and an arm that answered the second as though it were the
+# first would be measuring its own misconfiguration. They select apparatus, in
+# the way `request_timeout_seconds` does; they are not wording, and each one is
+# recorded with the run.
+
+# The two questions a benchmark can put to this arm. `repository` is
+# NL2RepoBench's: an empty workspace and a specification, answered with a whole
+# project. `edit` is SWE-Bench-Pro's: a repository already on disk and a
+# description of the change wanted, answered with the files that change.
+TASK_SHAPES = ("repository", "edit")
+
 SINGLE_SHOT = AgentHyperparameters(
     solution="Single-Shot",
     label="single-shot",
@@ -325,11 +409,30 @@ SINGLE_SHOT = AgentHyperparameters(
         # part of its setup, and so that the attempts above stay the only
         # retries: the client makes none of its own.
         "request_timeout_seconds": int,
+        # Which question the benchmark is asking; see `TASK_SHAPES`.
+        "task_shape": str,
+        # Where the benchmark grades. NL2RepoBench mounts an empty `/workspace`
+        # and copies it into a tester sidecar; SWE-Bench-Pro ships the
+        # repository at `/app` inside the task's own image. The runner writes
+        # where this says and nowhere else, so a path that is wrong fails
+        # visibly rather than scoring zero for a reason no record explains.
+        "workspace": str,
+        # How much of the repository the one request may carry, in characters.
+        # It bounds an `edit` prompt and is unused by a `repository` one, where
+        # the specification is the whole of the input. A budget rather than a
+        # selection: what goes in it is assembled mechanically by the runner
+        # and recorded per run, because choosing *which* code the model sees is
+        # retrieval, and retrieval is a method rather than a control.
+        "context_chars": int,
     },
     defaults={
         "request_attempts": 3,
         "request_timeout_seconds": 600,
+        "task_shape": "repository",
+        "workspace": "/workspace",
+        "context_chars": 120_000,
     },
+    choices={"task_shape": TASK_SHAPES},
 )
 
 # Terminus 2: Harbor's own reference agent, and the second baseline. A model
@@ -430,9 +533,14 @@ _TOP_LEVEL_KEYS = {
     "task",
     "model",
     "agent",
+    # Which file the three sampling values are read from. Optional, and read
+    # by a configuration that belongs to a different comparison than the one
+    # `configs/generation.yaml` describes; see `_sampling_path`.
+    "sampling",
     # Only an archived setup states this; see `load_experiment_config`.
     "generation",
 }
+_SAMPLING_KEYS = {"file"}
 # The `run` block is Harbor's own job configuration, narrowed to the keys this
 # project has a use for. Beyond where results land, it is what makes a
 # benchmark-scale run finish: `n_concurrent_trials` is how many tasks execute
@@ -471,6 +579,7 @@ _ENVIRONMENT_KEYS = {
 _TASK_KEYS = {"path"}
 _BENCHMARK_KEYS = {
     "dataset",
+    "path",
     "ref",
     "task_names",
     "exclude_task_names",
@@ -839,9 +948,10 @@ def _build_config(
             "not a second place to set it."
         )
     generation = load_generation_config(
+        path=_sampling_path(document, source),
         stated=_require_mapping(stated_generation, "'generation'", source)
         if stated_generation is not None
-        else None
+        else None,
     )
 
     run = _require_mapping(document.get("run", {}), "'run'", source)
@@ -947,6 +1057,29 @@ def _validate_concurrency(
         )
 
 
+def _sampling_path(document: Mapping[str, Any], source: str) -> Path | None:
+    """Which file this configuration reads its sampling from.
+
+    `configs/generation.yaml` by default, and every configuration of the
+    NL2RepoBench comparison takes that default. A configuration that belongs to
+    a different comparison names its own file instead — the HumanEval
+    replication does, because the values it must sample at are stated in the
+    paper it reproduces rather than chosen here.
+
+    This is not a second place to set the values. It selects one file; the
+    three values still come from a file and never from a configuration, an arm
+    or a runner, and `GenerationConfig.source` records which file a run read.
+    """
+    sampling = document.get("sampling")
+    if sampling is None:
+        return None
+    sampling = _require_mapping(sampling, "'sampling'", source)
+    _reject_unknown(sampling, _SAMPLING_KEYS, "'sampling'", source)
+    named = _require_str(sampling, "file", "'sampling'", source)
+    path = Path(named)
+    return path if path.is_absolute() else _ROOT / path
+
+
 def _build_source(
         document: Mapping[str, Any],
         source: str,
@@ -965,12 +1098,39 @@ def _build_source(
 
     benchmark = _require_mapping(document.get("benchmark"), "'benchmark'", source)
     _reject_unknown(benchmark, _BENCHMARK_KEYS, "'benchmark'", source)
-    dataset = _require_str(benchmark, "dataset", "'benchmark'", source)
-    if "/" not in dataset:
+
+    # A benchmark is named by registry dataset or by local directory, never
+    # both. `path` exists for benchmarks Harbor's registry does not carry —
+    # HumanEval is the one — and it is deliberately a second key rather than a
+    # value `dataset` may take, so that a mistyped `org/name` is still an
+    # error rather than a directory that does not exist.
+    if ("dataset" in benchmark) == ("path" in benchmark):
         raise ConfigurationError(
-            f"'benchmark.dataset' in {source} must name a registry dataset as "
-            f"'org/name', got {dataset!r}."
+            f"'benchmark' in {source} must state exactly one of 'dataset' (an "
+            "'org/name' dataset from Harbor's registry) and 'path' (a "
+            "directory of task packages on this machine)."
         )
+
+    dataset = None
+    path = None
+    if "dataset" in benchmark:
+        dataset = _require_str(benchmark, "dataset", "'benchmark'", source)
+        if "/" not in dataset:
+            raise ConfigurationError(
+                f"'benchmark.dataset' in {source} must name a registry dataset "
+                f"as 'org/name', got {dataset!r}."
+            )
+    else:
+        path = _require_str(benchmark, "path", "'benchmark'", source)
+        if "ref" in benchmark:
+            raise ConfigurationError(
+                f"'benchmark.ref' in {source} pins a registry version, and "
+                "this benchmark is a local directory. What pins a local one is "
+                "a digest over its tasks, which the launcher computes and "
+                "archives; stating a ref here would record a version nothing "
+                "resolved."
+            )
+
     n_tasks = benchmark.get("n_tasks")
     if n_tasks is not None and (not isinstance(n_tasks, int) or n_tasks < 1):
         raise ConfigurationError(
@@ -980,6 +1140,7 @@ def _build_source(
     return (
         BenchmarkSettings(
             dataset=dataset,
+            path=path,
             ref=benchmark.get("ref"),
             task_names=_require_str_list(benchmark, "task_names", source),
             exclude_task_names=_require_str_list(

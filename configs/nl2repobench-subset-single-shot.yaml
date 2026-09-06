@@ -31,8 +31,8 @@ description: >-
 
 run:
   jobs_dir: jobs
-  n_attempts: 2
-  n_concurrent_trials: 10
+  n_attempts: 5
+  n_concurrent_trials: 20
   artifacts:
     - /workspace
 
@@ -114,7 +114,7 @@ model:
 
 agent:
   import_path: evaluation_platform.single_shot_agent:SingleShotAgent
-  n_concurrent: 10
+  n_concurrent: 20
   hyperparameters:
     # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
     # It is set for every arm at once in `configs/generation.yaml`, so that a

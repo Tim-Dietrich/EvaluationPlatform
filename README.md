@@ -96,6 +96,22 @@ against whatever the file says today. A job's archived
 `experiment-config.yaml` pins them the way it pins the benchmark digest, so
 `--resume` continues a job at the sampling its first half ran at.
 
+One file per *comparison*, rather than one file outright. A configuration may
+name a different sampling file:
+
+```yaml
+sampling:
+  file: configs/generation-humaneval.yaml
+```
+
+and one does. `humaneval-self-collaboration.yaml` reproduces a published
+experiment, so the values it samples at are stated in that paper rather than
+chosen here — temperature 0 and a 512-token ceiling — and forcing them through
+the file the NL2RepoBench arms read would make one comparison out of two. What
+the invariant protects is unchanged and still enforced: the three values come
+from a file and never from a configuration, an arm or a runner; every arm of
+one comparison reads one file; and which file a run read is recorded with it.
+
 The output ceiling is a cap rather than a target. It is set by Single-Shot,
 which has to fit an entire repository into one reply where the others spend
 their budget a file or a function at a time; the arms that answer in small
@@ -257,6 +273,40 @@ A configuration may instead point at a single local task directory with
 `task: {path: ...}`, for a task authored by hand rather than taken from a
 benchmark. Exactly one of `benchmark` and `task` is required.
 
+### A benchmark Harbor does not publish
+
+`benchmark.dataset` needs the benchmark to be in Harbor's registry, and one we
+need is not. HumanEval is in neither the git registry nor the package registry
+— between them they offer `humanevalfix`, which is 164 *repair* tasks, and
+`evoeval`, which is 100 mutated problems — so for that one benchmark the tasks
+are generated here instead:
+
+```bash
+python scripts/build_humaneval_tasks.py
+```
+
+and named by directory rather than by dataset:
+
+```yaml
+benchmark:
+  path: benchmarks/humaneval/tasks
+```
+
+`benchmarks/humaneval/README.md` is the longer form: what the 164 packages are
+generated from and how those inputs are pinned, how grading reproduces the
+HumanEval authors' own pipeline down to its quirks, and why the HumanEval-ET
+ceiling is 96.3% rather than 100%. What a registry `ref` pins for every other
+benchmark, a digest over the generated tree pins here; the launcher computes it
+and archives it in `jobs/<job>/benchmark.json`, and stating a `ref` beside a
+`path` is refused. Everything else — `task_names`, `exclude_task_names`,
+`n_tasks` — goes through Harbor's own dataset filtering exactly as it does for
+a registry dataset.
+
+Generating a benchmark rather than depending on one is the exception and should
+stay one. It is worth the exception here because the alternative was
+publishing somebody else's benchmark to a shared registry under our own
+account.
+
 ## Running a whole benchmark
 
 A NL2RepoBench task takes around six minutes, so 104 of them in sequence is
@@ -352,6 +402,32 @@ setup to exist:
 
 The Tester only ever runs the code and tests the agent wrote itself. A task's
 reference tests stay in its tester sidecar and are never visible to the agent.
+
+The tool ships **two entry points**, and `task_shape` selects which one runs.
+They are not two settings of one code path: they define their roles
+differently, give them different tools, and mean different things by a Tester.
+
+- `repository` (the default) is `core.agent.SelfCollabSession`, described
+  above. Its Analyst explores an existing repository and names the files to
+  change, its Coder edits them with `edit_file` and is shown its own `git diff`
+  between rounds, and its Tester runs the `test_command`. This is the shape
+  NL2RepoBench is answered in, and it is what every configuration that predates
+  `task_shape` gets.
+- `humaneval` is `run_humaneval.py`, which is what the authors' own `bash
+  run.sh` invokes and therefore the code path behind the paper's HumanEval
+  figures. Its Analyst makes one plain call with no tools, its Coder writes
+  `solution.py` with `write_file` under a `max_steps` budget, and its Tester is
+  a model that writes its own `check(candidate)` cases and runs them. It takes
+  `max_rounds` and `max_steps`; `analyst_steps` and `coder_steps` belong to the
+  other shape, and `test_command` is refused outright rather than archived and
+  ignored, because a Tester that writes its own tests has no command to run.
+
+The runner imports and calls the authors' `run_task` rather than reimplementing
+it, so the prompts, the loop and the order of the roles are theirs. What the
+harness does around it — one problem instead of a HuggingFace dataset, the
+returned code written to where the benchmark grades, and the model call wrapped
+for accounting — is listed in every run's `resolved-setup.json` under
+`harness_compensations`.
 
 ### CodeTeam
 

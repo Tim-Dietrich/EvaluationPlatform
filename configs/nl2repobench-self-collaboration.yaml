@@ -22,24 +22,7 @@ description: >-
 run:
   jobs_dir: jobs
   n_attempts: 1
-  # How many tasks execute at once. This is the setting that decides whether
-  # the benchmark takes ten hours or two, and the one to match to the machine:
-  # each NL2RepoBench task declares a ceiling of 2 CPUs and 8 GB, and the
-  # launcher reports how that compares with what Docker actually has before
-  # the first container starts.
-  #
-  # Four suits a machine giving Docker around 8 GB. Tasks spend most of their
-  # time waiting on the model rather than on this machine's processors, so
-  # concurrency well above the core count still pays; memory is the ceiling
-  # that bites, because a trial that reaches its limit is killed and scored as
-  # a failed task rather than merely slowed down.
-  n_concurrent_trials: 4
-  # What a transient failure costs. Over 104 tasks a provider hiccup or a lost
-  # connection is close to certain, and without this the affected task is
-  # scored as an error and its result is simply missing from the run. Harbor's
-  # own exclusions still apply, so the failures that a retry cannot fix — a
-  # timeout, an exhausted usage limit, a rejected credential — fail once
-  # rather than three times.
+  n_concurrent_trials: 10
   retry:
     max_retries: 2
     wait_multiplier: 2
@@ -50,18 +33,7 @@ run:
 
 benchmark:
   dataset: nl2repobench/nl2repobench
-  # The dataset's content digest. Resolved and re-pinned at launch, and
-  # recorded in `jobs/<job>/benchmark.json` alongside the selected tasks.
   ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
-  # Select a subset with `task_names` (glob patterns, org-qualified),
-  # `exclude_task_names`, or `n_tasks`. With none of them, the run covers the
-  # entire benchmark.
-  #
-  # The published tasks name their tester images on a private mirror that needs
-  # credentials this project does not have. The same images are public on GHCR,
-  # so each selected task's image is pulled from `pull_from` and made available
-  # locally under the name in `expects`. The benchmark's own files are never
-  # modified.
   image_mirror:
     - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
       pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
@@ -71,31 +43,6 @@ model:
   name: ${MODEL:-moonshotai/kimi-k2.5}
   base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
   api_key_env: API_KEY
-  # Which of the aggregator's servers may answer. A model name does not name a
-  # server: OpenRouter offers this model from more than twenty providers that
-  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
-  # very different speeds, and its default route is chosen by price. Unpinned,
-  # two arms of this comparison can run the same model at different numerical
-  # precision, and so can two requests inside one arm, with nothing recording
-  # which. That is a confound in the one variable every configuration here
-  # holds constant, so it is pinned beside the model rather than left to the
-  # aggregator, and it belongs in `model` rather than in any solution's
-  # hyperparameters because it is not a property of a method. The test that
-  # requires these blocks to agree across configurations is therefore the test
-  # that keeps every arm on one server.
-  #
-  # Measured on 2026-08-26, one 500-token generation each: the default route
-  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
-  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
-  # tokens, the best speed for the money among the endpoints this account may
-  # use. siliconflow/fp8 is the named second choice because it is the only
-  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
-  # precision this pin exists to fix; `allow_fallbacks: false` stops the
-  # aggregator substituting anything outside the pair.
-  #
-  # These tags name endpoints *of the model above*. Changing the model means
-  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
-  # on offer, with each endpoint's quantization and price.
   routing:
     order:
       - baidu/fp8
@@ -104,61 +51,13 @@ model:
 
 agent:
   import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
-  # A sub-limit within `n_concurrent_trials` on how many trials may be calling
-  # the model at the same time. Equal to it, as here, it does nothing; lower it
-  # to stay under a provider's rate limit without giving up the concurrency
-  # that container setup, installation, and verification still get.
-  n_concurrent: 4
-  # The revision of the code generation tool under evaluation: the authors'
-  # own repository at its current head, with nothing of ours in it. What
-  # running it unmodified costs on a benchmark written from scratch, and what
-  # the test command below does about that, is described in
-  # docs/latex/tool-modifications.tex.
+  n_concurrent: 10
   repository: https://github.com/YihongDong/Self-collaboration-Code-Generation.git
   commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
   hyperparameters:
     max_rounds: 3
     analyst_steps: 10
     coder_steps: 15
-    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
-    # It is set for every arm at once in `configs/generation.yaml`, so that a
-    # difference between this run and the arms beside it is a difference in
-    # method. Stating one of the three here is rejected before Docker starts.
-
-    # One note that the shared file cannot carry, because it is about this
-    # revision rather than about the comparison: `top_p` is inert here. The tool
-    # declares it and sends it only from its non-agentic entry point, so the
-    # Analyst and the Coder sample at the provider's default for it whatever the
-    # shared file says. The run's `resolved-setup.json` records the value that
-    # was resolved, as every arm's does.
-    # Reasoning is deliberately not configured. The revision under evaluation
-    # sends no reasoning field on its tool-calling path, so how much the model
-    # reasons is the provider's default for it at that moment: set outside the
-    # experiment, absent from its written setup, and free to change between
-    # runs. Asking for it here with `reasoning_effort` or `request_extra` fails
-    # the run at startup rather than being silently dropped, which is the point
-    # — the alternative is a patched tool. What the model actually did is still
-    # recorded after the fact, as `reasoning_tokens` in the run's model usage.
-    #
-    # The first line is the one accommodation this experiment makes for running
-    # the tool unmodified, and it is made here rather than in the tool. The
-    # session decides whether the Coder produced anything by reading
-    # `git diff`, which on a project written from scratch reports nothing at
-    # all, because every generated file is untracked. Without this the Tester
-    # would discard a genuine test result on every round and substitute "No
-    # code changes were made", and could never report success.
-    # `--intent-to-add` registers the files with the index without committing
-    # them, which is what makes them visible to `git diff`. It runs before the
-    # tests rather than after, so that a test run which times out still leaves
-    # the workspace readable; build output is kept out of it by
-    # `.git/info/exclude`, written by run_self_collaboration.py.
-    #
-    # pytest exits 5 when it collects nothing, which the Tester reports as a
-    # failure with no explanation, and the next Coder round is told its work
-    # was incorrect. On a project built from scratch that is the normal state
-    # until the agent writes its tests, so the command says so explicitly.
-    # The message goes to stderr, which the tool appends last, so it survives
-    # the summarizer's fallback to the tail of the output.
     test_command: |
       git add --intent-to-add .
       python -m pip install -e . -q
