@@ -1,0 +1,63 @@
+@startuml 02-vorbereitung
+'=============================================================================
+' Abbildung 2 von 4 -- Vorbereitung eines Experiments
+'
+' Alles, was vor dem ersten Container geschieht. Die Konfiguration wird
+' geprueft und aufgeloest, der Benchmark auf eine Version festgelegt und
+' bereitgestellt, daraus ein Auftrag fuer die Orchestrierung erzeugt. Der
+' aufgeloeste Aufbau wird archiviert, bevor der Lauf beginnt; ein
+' unterbrochener Lauf wird aus diesem Archiv fortgesetzt.
+'=============================================================================
+!include stil.puml
+
+package "Experimentdefinition" {
+  component "Experimentkonfiguration" as KONFIG $PLATTFORM
+  component "Sampling-Konfiguration" as SAMPLING $PLATTFORM
+  component "Zugangsdaten" as ZUGANG $PLATTFORM
+}
+
+database "Laufaufzeichnung" as AUFZEICHNUNG $PLATTFORM
+
+package "Vorbereitung" {
+  component "Pruefung und\nAufloesung" as PRUEFUNG $PLATTFORM
+  component "Benchmark-\nBereitstellung" as BEREITSTELLUNG $PLATTFORM
+  component "Job-Erzeugung" as JOB $PLATTFORM
+}
+
+component "Benchmark-Generator" as GENERATOR $PLATTFORM
+cloud "Benchmark-Registry" as BENCHREGISTRY
+cloud "Abbild-Registry" as ABBILDREGISTRY
+
+component "Orchestrierung" as ORCHESTRIERUNG $INFRA
+
+' ---- Ausrichtung ----------------------------------------------------------
+KONFIG -[hidden]d-> SAMPLING
+SAMPLING -[hidden]d-> ZUGANG
+GENERATOR -[hidden]d-> BENCHREGISTRY
+BENCHREGISTRY -[hidden]d-> ABBILDREGISTRY
+
+' ---- Ablauf ---------------------------------------------------------------
+KONFIG   -d-> PRUEFUNG
+SAMPLING -d-> PRUEFUNG
+ZUGANG   .d.> PRUEFUNG
+
+PRUEFUNG       -d-> BEREITSTELLUNG
+BEREITSTELLUNG -d-> JOB
+JOB            -d-> ORCHESTRIERUNG
+
+GENERATOR      -l-> BEREITSTELLUNG
+BENCHREGISTRY  -l-> BEREITSTELLUNG
+ABBILDREGISTRY -l-> BEREITSTELLUNG
+
+BEREITSTELLUNG -l-> AUFZEICHNUNG
+JOB            -l-> AUFZEICHNUNG
+AUFZEICHNUNG   .r.> PRUEFUNG : Wiederaufnahme
+
+'================================================================== Legende ==
+legend bottom
+  |<#E7EFF9> Evaluierungsplattform |
+  |<#EDEFF1> Orchestrierungsplattform |
+  |<#FFFFFF> Externe Dienste und Quellen |
+endlegend
+
+@enduml

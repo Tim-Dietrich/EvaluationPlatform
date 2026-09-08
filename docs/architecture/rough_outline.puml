@@ -71,12 +71,63 @@ package "Experiment Definition" {
     component "Konfiguration" as CONFIG $PLATFORM
 }
 
+package "Orchestrator" {
+    component "Orchestrator\nFramework" as ORCH $INFRA
+    component "Integration" as INTEGRATION $PLATFORM
+}
+
+package "Externer Service" {
+    component "LLM Provider" as PROVIDER #FFFFFF
+}
+
+package "Externe Quellen" {
+    component "Benchmark" as BENCH $SUBJECT
+    component "Quellcode-Generierungs\nLösung" as CODEGEN $SUBJECT
+}
+
+package "Durchlauf eines Versuchs" {
+    component "Ausführungs\nContainer" as CONTAINER1 $PLATFORM
+    component "Evaluierungs\nContainer" as CONTAINER2 $PLATFORM
+}
+
+package "Ausgabe Artefakte" {
+    component "Generierte Lösung" as SOLU $SUBJECT
+    component "Bewertung" as REWARD $SUBJECT
+}
+
+' ================ ALIGNMENT HINTS
+BENCH -[hidden]d-> CODEGEN
+CONTAINER1 -[hidden]r-> CONTAINER2
+SOLU -[hidden]r-> REWARD
+
+' ================ RELATIONS
+CONFIG -d-> ORCH : Sendet Konfiguration
+
+ORCH -r-> INTEGRATION
+INTEGRATION -r-> PROVIDER : Parameter\naus Konfig
+
+'INTEGRATION -d-> BENCH
+'INTEGRATION -d-> CODEGEN
+INTEGRATION -d-> "Externe Quellen" : Bezug der Daten
+INTEGRATION -d-> CONTAINER1 : Startet\nDurchlauf
+
+BENCH -r-> CONTAINER1
+CODEGEN -r-> CONTAINER1
+
+CONTAINER1 -r-> CONTAINER2
+
+CONTAINER1 -d-> SOLU
+SOLU -u-> CONTAINER2
+CONTAINER2 -d-> REWARD
+
+note bottom of PROVIDER : Steht allen Diensten zur Verfügung
+
 '================================================================== legend ===
 legend bottom
-  |<#E7EFF9> Built here: the evaluation platform |
-  |<#EDEFF1> Adopted orchestration infrastructure |
-  |<#FAEBD0> Interchangeable subject of a study: the solution and the benchmark |
-  |<#FFFFFF> External service |
+  |<#E7EFF9> Evaluierungs Plattform |
+  |<#EDEFF1> Bereits existierende Orchestrierungs-Plattform |
+  |<#FAEBD0> Bestandteile der Studie, zu untersuchende Objekte |
+  |<#FFFFFF> Externe Service |
 endlegend
 
 @enduml

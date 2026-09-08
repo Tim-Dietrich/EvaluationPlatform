@@ -90,3 +90,8 @@ benchmarks/humaneval/tasks/
 # packages from the digest-pinned commit in benchmarks/sketcheval/data.
 # Generated, not source: regenerate it rather than editing or committing it.
 benchmarks/sketcheval/tasks/
+
+# Standalone CodeTeam arms: each run clones the tool, builds a virtual
+# environment, and writes generated repositories and graded copies of them.
+# The runner and its record are tracked; what a run produces is not.
+scripts/codeteam-standalone/runs/

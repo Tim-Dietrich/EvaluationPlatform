@@ -1,0 +1,60 @@
+@startuml 01-uebersicht
+'=============================================================================
+' Abbildung 1 von 4 -- Gesamtuebersicht
+'
+' Zeigt den Weg eines Experiments vom Konfigurationsdokument bis zur
+' Auswertung. Benchmark und Codegenerierungsloesung bleiben unbenannt: beide
+' treten ueber eine festgelegte Schnittstelle ein, die Abbildung gilt daher
+' unabhaengig davon, welcher Benchmark bewertet und welche Loesung gemessen
+' wird. Die Detailabbildungen 2 bis 4 vertiefen je einen Abschnitt.
+'=============================================================================
+!include stil.puml
+
+component "Experimentkonfiguration" as KONFIG $PLATTFORM
+
+package "Austauschbare Bestandteile" {
+  component "Benchmark" as BENCH $STUDIE
+  component "Codegenerierungs-\nloesung" as LOESUNG $STUDIE
+}
+
+component "Vorbereitung" as VORBEREITUNG $PLATTFORM
+component "Orchestrierung" as ORCHESTRIERUNG $INFRA
+
+package "Durchlauf eines Versuchs" {
+  component "Ausfuehrungscontainer" as AUSFUEHRUNG $PLATTFORM
+  component "Bewertungscontainer" as BEWERTUNG $PLATTFORM
+}
+
+cloud "Modellanbieter" as ANBIETER
+
+database "Laufaufzeichnung" as AUFZEICHNUNG $PLATTFORM
+component "Auswertung" as AUSWERTUNG $PLATTFORM
+
+' ---- Ausrichtung ----------------------------------------------------------
+BENCH -[hidden]d-> LOESUNG
+
+' ---- Ablauf ---------------------------------------------------------------
+KONFIG         -d-> VORBEREITUNG
+VORBEREITUNG   -d-> ORCHESTRIERUNG
+ORCHESTRIERUNG -d-> AUSFUEHRUNG
+AUSFUEHRUNG    -d-> BEWERTUNG
+BEWERTUNG      -d-> AUFZEICHNUNG
+AUFZEICHNUNG   -d-> AUSWERTUNG
+
+BENCH   -r-> VORBEREITUNG
+BENCH   -r-> BEWERTUNG
+LOESUNG -r-> AUSFUEHRUNG
+
+AUSFUEHRUNG  -r-> ANBIETER
+AUSFUEHRUNG  ..> AUFZEICHNUNG
+VORBEREITUNG ..> AUFZEICHNUNG
+
+'================================================================== Legende ==
+legend bottom
+  |<#E7EFF9> Evaluierungsplattform |
+  |<#EDEFF1> Orchestrierungsplattform |
+  |<#FAEBD0> Austauschbare Studienbestandteile |
+  |<#FFFFFF> Externe Dienste und Quellen |
+endlegend
+
+@enduml

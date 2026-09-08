@@ -1,0 +1,50 @@
+'=============================================================================
+' Gemeinsames Format der Architekturabbildungen.
+'
+' Wird von jeder Abbildung eingebunden:  !include stil.puml
+' Farbe traegt genau eine Unterscheidung: die Zugehoerigkeit eines Bausteins.
+'=============================================================================
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam componentStyle rectangle
+skinparam linetype ortho
+skinparam ArrowColor #4A5158
+skinparam ArrowFontColor #4A5158
+skinparam ArrowFontSize 11
+skinparam nodesep 28
+skinparam ranksep 45
+
+skinparam package {
+  FontSize 13
+  FontStyle bold
+  FontColor #2B3138
+  BackgroundColor #FFFFFF
+  BorderColor #9AA2AA
+}
+skinparam component {
+  FontColor #23282D
+  FontSize 13
+}
+skinparam folder {
+  BackgroundColor #F6F7F9
+  BorderColor #7E868F
+  FontColor #23282D
+}
+skinparam database {
+  BackgroundColor #E7EFF9
+  BorderColor #3C6E9F
+  FontColor #23282D
+}
+skinparam cloud {
+  BackgroundColor #FFFFFF
+  BorderColor #7E868F
+  FontColor #23282D
+}
+
+!$PLATTFORM = "#back:E7EFF9;line:3C6E9F"
+!$INFRA     = "#back:EDEFF1;line:7E868F"
+!$STUDIE    = "#back:FAEBD0;line:B5822E"
