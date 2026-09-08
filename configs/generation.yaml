@@ -13,7 +13,7 @@
 # of a comparison still reads one file, and which file a run read is recorded
 # in its archived setup. See `configs/generation-humaneval.yaml`.
 temperature: 0.2
-top_p: 0.95
+top_p: 0.90
 #max_tokens: 131072 # The maximum number of output tokens as defined by the provider baidu
 max_tokens: 32768 # value to use for CodeS due to the underlying structure
 #max_tokens: 8192 # Unused old test value for verifying a solution works

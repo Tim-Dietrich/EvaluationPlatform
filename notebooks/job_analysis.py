@@ -73,9 +73,9 @@ OUTCOMES = ["solved", "partial credit", *STAGES, "lost to host fault"]
 EARNED = ("solved", "partial credit")
 
 COMMON_COLUMNS = (
-    "arm", "trial", "task", "difficulty", "n_hidden_tests",
+    "arm", "trial", "task", "difficulty", "n_hidden_tests", "spec_words",
     "reward", "scored", "solved",
-    "cost_usd", "in_tok", "cache_tok", "out_tok",
+    "cost_usd", "in_tok", "cache_tok", "out_tok", "total_tok", "workspace_files",
     "t_total", "t_agent", "t_verify",
     "budget_name", "budget_value", "hit_budget", "ending",
     "exception", "outcome", "fault_stage", "fault_cause",
@@ -200,6 +200,26 @@ def _written_modules(workspace: str) -> tuple:
                 if at_root and len(parts) == 1:
                     tops.add(name)
     return frozenset(tops), frozenset(dotted), frozenset(bare), frozenset(deep)
+
+
+@functools.lru_cache(maxsize=None)
+def _workspace_files(workspace: str) -> int:
+    """How many files the run left behind, to five directory levels.
+
+    A run that wrote nothing at all is worth telling apart from one that wrote
+    the wrong thing, and the reward alone will not do it — one task in this
+    benchmark scores 0.98 against an empty workspace, because its tests import
+    the library already installed in the image rather than the generated code.
+    """
+    total = 0
+    for root, dirs, files in os.walk(workspace):
+        relative = os.path.relpath(root, workspace)
+        depth = 0 if relative == "." else len(relative.split(os.sep))
+        if depth > 5:
+            dirs[:] = []
+            continue
+        total += len(files)
+    return total
 
 
 def _refine(kind: str, message: str, workspace: str) -> str:
@@ -447,6 +467,60 @@ def _finalize_self_collaboration(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+
+# --- CodeS: sketch the repo, sketch each file, then fill every function ------
+
+_CODES_FILE = re.compile(
+    r"function body prompts: file (\d+) of (\d+), \S+, (\d+) functions so far")
+_CODES_BUDGET = re.compile(
+    r"BudgetExhausted: Stopped after (\d+)\s?(?:tokens|s), at the configured (\w+) of")
+# The filled sketches that came back as unparseable Python. Anchored at the start
+# of a line so the interpreter's own `SyntaxWarning: invalid escape sequence`
+# chatter, of which there are thousands, is not counted as a failure.
+_CODES_UNPARSEABLE = re.compile(r"^(?:invalid syntax|unterminated|expected )", re.M)
+
+
+def _read_codes(trial: Path, result: dict) -> dict:
+    """The pipeline's own progress log: what it planned, and where it stopped.
+
+    Only `codes.log` is read. The three `agent/codes/*.jsonl` files beside it are
+    the full prompt-and-response record of every stage and run to gigabytes per
+    job; the log carries the counts without any of that.
+    """
+    log = read_text(trial / "agent" / "codes.log")
+    files = _CODES_FILE.findall(log)
+    stop = _CODES_BUDGET.search(log)
+    completed = "Done. Repo at:" in log
+    return {
+        "completed": completed,
+        "requests": log.count("HTTP Request: POST"),
+        # How many files the repo sketch planned, and how far the filler got.
+        "planned_files": int(files[0][1]) if files else 0,
+        "files_reached": int(files[-1][0]) if files else 0,
+        # Function bodies queued for writing — the size of the decomposition.
+        "function_prompts": int(files[-1][2]) if files else 0,
+        "stopped_at": int(stop.group(1)) if stop else float("nan"),
+        "stop_limit": stop.group(2) if stop else ("" if completed else "killed"),
+        "unparseable": len(_CODES_UNPARSEABLE.findall(log)),
+    }
+
+
+def _finalize_codes(frame: pd.DataFrame) -> pd.DataFrame:
+    # The pipeline either reaches its own "Done" or it is stopped, by one of its
+    # two configured budgets or by the harness around it.
+    frame["hit_budget"] = ~frame.completed
+    frame["ending"] = "finished the whole pipeline"
+    for limit, label in (("max_token_budget", "stopped at the token budget"),
+                         ("max_wall_clock_seconds", "stopped at the wall clock"),
+                         ("killed", "killed before it finished")):
+        frame.loc[frame.stop_limit == limit, "ending"] = label
+    # Some runs print the pipeline's own "Done" having produced nothing: the repo
+    # sketch came back with no file tree, so there was never anything to fill.
+    # That is not a finished pipeline and must not be counted as one.
+    frame.loc[frame.completed & (frame.workspace_files == 0), "ending"] = "wrote nothing at all"
+    return frame
+
+
 ARMS = (
     Arm(
         name="single-shot",
@@ -475,6 +549,15 @@ ARMS = (
                        "self_test_passed",
                        "self_test_failures", "analyst_steps", "coder_steps",
                        "coder_rounds_at_cap", "n_bash", "n_read", "n_edit"),
+    ),
+    Arm(
+        name="codes",
+        agent_names=("codes",),
+        budget_name="max_token_budget",
+        read_trial=_read_codes,
+        finalize=_finalize_codes,
+        extra_columns=("completed", "requests", "planned_files", "files_reached",
+                       "function_prompts", "stopped_at", "stop_limit", "unparseable"),
     ),
 )
 
@@ -542,10 +625,13 @@ def load_job(job, *, solved_at: float = 0.9, metadata_csv=None) -> pd.DataFrame:
             "in_tok": usage.get("n_input_tokens"),
             "cache_tok": usage.get("n_cache_tokens"),
             "out_tok": usage.get("n_output_tokens"),
+            "total_tok": (usage.get("n_input_tokens") or 0)
+                         + (usage.get("n_output_tokens") or 0) or None,
             "t_total": seconds({"started_at": result["started_at"],
                                 "finished_at": result["finished_at"]}),
             "t_agent": seconds(result.get("agent_execution")),
             "t_verify": seconds(result.get("verifier")),
+            "workspace_files": _workspace_files(str(trial / "artifacts" / "workspace")),
             "budget_name": arm.budget_name,
             "budget_value": kwargs.get(arm.budget_name),
             "exception": (result["exception_info"] or {}).get("exception_type"),
@@ -584,7 +670,7 @@ def load_jobs(jobs: dict, **kwargs) -> pd.DataFrame:
 
 def _join_metadata(frame: pd.DataFrame, metadata_csv=None) -> pd.DataFrame:
     meta = pd.read_csv(metadata_csv or TASK_METADATA,
-                       usecols=["task", "difficulty", "n_hidden_tests"])
+                       usecols=["task", "difficulty", "n_hidden_tests", "spec_words"])
     frame = frame.merge(meta, on="task", how="left")
     frame["difficulty"] = pd.Categorical(frame["difficulty"], LEVELS, ordered=True)
     return frame
@@ -618,7 +704,8 @@ def headline(frame: pd.DataFrame) -> str:
         + (f"  ({len(scored)} scored, {lost} lost to a host fault)" if lost else ""),
         f"mean reward     : {scored.reward.mean():.3f}   median"
         f" {scored.reward.median():.3f}   (n={len(scored)})",
-        f"total spend     : ${frame.cost_usd.sum():.2f}",
+        f"total tokens    : {fmt_tokens(frame.total_tok.sum())}"
+        f"  ({frame.cache_tok.sum() / frame.in_tok.sum():.0%} of input served from cache)",
         f"total wall clock: {frame.t_total.sum() / 3600:.1f} h summed over trials",
     ]
     return "\n".join(lines)
@@ -632,23 +719,24 @@ def zero_rate(frame: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
-def cost_quartile_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Trials in four equal groups by cost, with what each returned and consumed."""
-    labels = ("Q1\ncheapest", "Q2", "Q3", "Q4\ndearest")
-    binned = frame.assign(quartile=pd.qcut(frame.cost_usd, 4, labels=labels))
+def token_quartile_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Trials in four equal groups by tokens, with what each returned and used."""
+    labels = ("Q1\nleanest", "Q2", "Q3", "Q4\nheaviest")
+    binned = frame.assign(quartile=pd.qcut(frame.total_tok, 4, labels=labels))
     group = binned.groupby("quartile", observed=True).agg(
-        mean_reward=("reward", "mean"), spend=("cost_usd", "sum"), n=("reward", "size"))
-    group["share"] = group.spend / frame.cost_usd.sum()
+        mean_reward=("reward", "mean"), tokens=("total_tok", "sum"),
+        n=("reward", "size"))
+    group["share"] = group.tokens / frame.total_tok.sum()
     return group
 
 
 def by_difficulty(frame: pd.DataFrame, **extra) -> pd.DataFrame:
-    """Median cost and mean reward per level, plus any arm-specific column.
+    """Median tokens and mean reward per level, plus any arm-specific column.
 
         ja.by_difficulty(df, median_turns=("episodes", "median"))
     """
     return frame.groupby("difficulty", observed=True).agg(
-        trials=("reward", "size"), median_cost=("cost_usd", "median"),
+        trials=("reward", "size"), median_tok=("total_tok", "median"),
         mean_reward=("reward", "mean"), **extra)
 
 
@@ -660,3 +748,165 @@ def cause_rows(frame: pd.DataFrame) -> list[tuple[str, int, str]]:
         counts = zeros[zeros.fault_stage == stage].fault_cause.value_counts()
         rows += [(cause, int(n), stage) for cause, n in counts.items()]
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# comparing arms
+# --------------------------------------------------------------------------- #
+
+#: Causes a single execution of the generated code would have surfaced at once:
+#: the file does not parse, a name is not defined, or the package cannot import
+#: itself. None of these needs a test suite or a specification to find — running
+#: the code once is enough — so they separate methods that execute what they
+#: write from methods that only emit it.
+EXECUTION_CATCHABLE = ("SyntaxError", "IndentationError", "NameError",
+                       "ImportError: circular import")
+
+
+def arm_order(frame: pd.DataFrame) -> list:
+    """The arms in the order they were loaded, which is the order to plot them."""
+    return list(dict.fromkeys(frame.arm))
+
+
+def paired(frame: pd.DataFrame, values: str = "reward") -> pd.DataFrame:
+    """Tasks as rows, arms as columns, restricted to tasks every arm scored.
+
+    Every arm ran the same benchmark, so the honest comparison is per task and
+    not between two marginal distributions. Dropping the tasks some arm never
+    scored costs a few rows and removes the possibility that one arm's mean is
+    flattered by a task another arm lost to a host fault.
+
+    Which tasks those are is always decided by the reward, whatever column is
+    being asked for. A trial lost to a host fault has no reward but does have a
+    `solved` of False, so pivoting a boolean column on its own would silently
+    compare a different — and larger — set of tasks.
+    """
+    arms = arm_order(frame)
+    rewards = (frame.pivot_table(index="task", columns="arm", values="reward",
+                                 observed=True).reindex(columns=arms))
+    keep = rewards.dropna().index
+    if values == "reward":
+        return rewards.loc[keep]
+    wide = frame.pivot_table(index="task", columns="arm", values=values,
+                             observed=True)
+    return wide.reindex(columns=arms).loc[keep]
+
+
+def compare(frame: pd.DataFrame) -> pd.DataFrame:
+    """One row per arm: what it scored, what it consumed, and what that came to.
+
+    Consumption is counted in tokens rather than in money. A bill depends on
+    which model was billed and at what price, and on how much of the input was
+    served from cache at a discount; a token count does not, so it is the
+    measure that still compares two arms run against different models or at
+    different times. `cost_usd` is still on the frame for anyone who wants it.
+
+    Two denominators are given because they disagree. `total_per_solved` counts
+    everything the arm read and wrote, and so charges an agent loop for
+    re-reading its own context every turn. `out_per_solved` counts only what the
+    model generated. An arm can lead on one and trail on the other.
+
+    `usage_reported` says how many trials recorded usage at all — one arm has
+    trials that recorded none, so its totals are a floor rather than a total.
+    """
+    rows = {}
+    for arm in arm_order(frame):
+        part = frame[frame.arm == arm]
+        scored = part[part.scored]
+        solved = int(part.solved.sum())
+        total, out = part.total_tok.sum(), part.out_tok.sum()
+        per = lambda n: n / solved if solved else float("nan")
+        rows[arm] = {
+            "trials": len(part),
+            "scored": len(scored),
+            "mean_reward": scored.reward.mean(),
+            "median_reward": scored.reward.median(),
+            "solved": solved,
+            "zeros": int((scored.reward == 0).sum()),
+            "in_tok": part.in_tok.sum(),
+            "out_tok": out,
+            "total_tok": total,
+            "cache_share": part.cache_tok.sum() / part.in_tok.sum(),
+            "total_per_solved": per(total),
+            "out_per_solved": per(out),
+            "usage_reported": int(part.total_tok.notna().sum()),
+            "median_minutes": part.t_total.median() / 60,
+        }
+    return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def fmt_tokens(n) -> str:
+    """A token count as a short string: `408.7M`, `50M`, `12.3k`, `940`.
+
+    A whole number keeps no decimal, so an axis of round ticks reads `50M` and
+    not `50.0M` while a single value still keeps its precision.
+    """
+    if pd.isna(n):
+        return "n/a"
+    for scale, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if abs(n) >= scale:
+            text = f"{n / scale:.1f}"
+            return (text[:-2] if text.endswith(".0") else text) + suffix
+    return f"{n:.0f}"
+
+
+def head_to_head(frame: pd.DataFrame) -> pd.DataFrame:
+    """Tasks on which the row arm scored strictly above the column arm."""
+    wide = paired(frame)
+    arms = list(wide.columns)
+    return pd.DataFrame(
+        [[pd.NA if a == b else int((wide[a] > wide[b]).sum()) for b in arms]
+         for a in arms], index=arms, columns=arms, dtype="Int64")
+
+
+def oracle(frame: pd.DataFrame) -> pd.DataFrame:
+    """What picking the best arm per task would score, and what each arm adds.
+
+    The first row is that upper bound. Each remaining row removes one arm and
+    recomputes it, so `reward_lost` is the arm's marginal contribution to the
+    set — what would be given up by not having run it at all. An arm that never
+    beats the others on any task contributes exactly nothing here, however well
+    it does in isolation.
+    """
+    wide = paired(frame)
+    solved = paired(frame, values="solved").astype(bool)
+    sets = {"all arms": list(wide.columns)}
+    sets.update({f"without {arm}": [c for c in wide.columns if c != arm]
+                 for arm in wide.columns})
+    table = pd.DataFrame({
+        "mean_reward": {k: wide[cols].max(axis=1).mean() for k, cols in sets.items()},
+        "solved": {k: int(solved[cols].any(axis=1).sum()) for k, cols in sets.items()},
+    })
+    table["reward_lost"] = table.mean_reward["all arms"] - table.mean_reward
+    table["solved_lost"] = table.solved["all arms"] - table.solved
+    return table
+
+
+def solved_alone(frame: pd.DataFrame) -> pd.DataFrame:
+    """Per arm, tasks it solved that no other arm did, against tasks it shared."""
+    solved = paired(frame, values="solved").astype(bool)
+    others = {arm: solved[[c for c in solved.columns if c != arm]].any(axis=1)
+              for arm in solved.columns}
+    return pd.DataFrame({
+        "only this arm": {a: int((solved[a] & ~others[a]).sum()) for a in solved},
+        "also solved elsewhere": {a: int((solved[a] & others[a]).sum()) for a in solved},
+    }).loc[list(solved.columns)]
+
+
+def outcome_mix(frame: pd.DataFrame) -> pd.DataFrame:
+    """Trials per outcome, arms as columns, best outcome first."""
+    table = frame.pivot_table(index="outcome", columns="arm", values="reward",
+                              aggfunc="size", observed=True)
+    return (table.reindex(index=OUTCOMES).reindex(columns=arm_order(frame))
+            .fillna(0).astype(int))
+
+
+def cause_by_arm(frame: pd.DataFrame, causes=None) -> pd.DataFrame:
+    """Zero counts as causes by arms, for `causes` or for every cause seen."""
+    zeros = frame[frame.scored & (frame.reward == 0)]
+    table = zeros.pivot_table(index="fault_cause", columns="arm", values="reward",
+                              aggfunc="size", observed=True)
+    table = table.reindex(columns=arm_order(frame))
+    if causes is not None:
+        table = table.reindex(index=list(causes))
+    return table.fillna(0).astype(int)
