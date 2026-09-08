@@ -1,0 +1,219 @@
+\chapter{Theoretische Grundlagen und Begriffe}\label{ch:Theoretische Grundlagen und Begriffe}
+
+Im Verlaufe dieser Arbeit werden etliche Begriffe aus dem Gebiet der Softwareentwicklung sowie Large Language Models benutzt. Dieses Kapitel dient der Erklärung der Grundlagen und der Begriffe aus diesen Gebieten.
+
+\section{Software Engineering und Requirements Engineering}\label{ch:Software Engineering und Requirements Engineering}
+
+Die Forschungsfrage \rqref{RQ1} erwähnt direkt zu Beginn den Begriff ''User Story''. Dieser Begriff stammt fundamental aus der Welt des Requirements Engineering; es bedarf damit also einer Einführung in diese Welt. 
+
+\subsection{Requirements Engineering}\label{ch:Requirements Engineering}
+
+Anforderungen (engl. Requirements) dienen als Grundlage von Software. Sie beschreiben in vielerlei Form die zugrundeliegenden Notwendigen Funktionen einer Software.\todo{Formulierung, evtl Citation} Bereits in den 70er Jahren wurde die Signifikanz von ''gut'' formulierten Anforderungen erkannt.\citeN{bellSoftwareRequirementsAre1976,boehmSoftwareEngineeringEconomics1984}. Um die Anforderungen an Software möglichst akkurat zu definieren, exisitiert das Themengebiet des \textbf{Requirement Engineering} (Kurz oft RE).
+
+% Bereits 1976 erkannte \cite{bellSoftwareRequirementsAre1976} ein fundamentales Problem in der Softwareentwicklung: Die Ursachen eines Problems in Software zu lösen, ist leicht, wenn die Ursache im Code selbst liegt. Dies gilt ebenfalls für Defizite, die durch fehlerhaftes Design verursacht wurden. Diesen Fakten gegenüber steht das weitaus kompliziertere Problem: \textit{''If there are problems in developing requirements, however, the software system meeting those requirements will clearly not be effective in solving the basic need, even if the causes of the problems are incorrectly identified.''}\cite{bellSoftwareRequirementsAre1976}
+
+% Die Signifikanz dieses Problems untermauern verschiedene Arbeiten aus der selben Zeit. Arbeiten wie \cite{boehmSoftwareEngineeringEconomics1984} schätzen die Kosten für eine späte Lösung von Requirements-basierten Problemen auf den Faktor 200 (Im Vergleich zu einer Lösung dieser Probleme in der Konzeptionsphase). Um gegen diese Probleme zu arbeiten und die Anforderungen an Software möglichst akkurat zu definieren, exisitiert das Themengebiet des \textbf{Requirement Engineering} (Kurz oft RE).
+
+Die Prozesse des RE sind vielfältig, \cite{vanlamsweerdeRequirementsEngineeringYear2000} definiert beispielsweise folgende Gesichtspunkte:
+
+\begin{itemize}
+    \item Analyse der zugrunde-liegenden Domäne
+    \item Erhebung von alternativen Modellen und Lösungen
+    \item Verhandlung bzw. Evaluierung aller Lösungswege
+    \item \textbf{Spezfikiation der letzendlichen Anforderungen und Annahmen}
+    \item Analyse der definierten Spezifikationen in Hinsicht auf deren Genauigkeit und Umsetzbarkait
+    \item Dokumentation der bestehenden Annahmen
+    \item Evolution der definierten Anforderungen basierend auf neueren Erkentnissen oder Zielen
+\end{itemize}
+
+Im Sinne dieser Arbeit ist vor allem ein Punkt interessant: Die Spezifikation von Anforderungen.
+
+\subsubsection{Funktionale und nicht-funktionale Anforderungen}\label{ch:Funktionale und nicht-funktionale Anforderungen}
+
+Für unseren Rahmen gibt es verschiedene Arten von Anforderungen die wir zunächst erläutern sollten. 
+
+\todo[inline]{FR und NFR hier erklären}
+
+\subsection{User Stories}\label{ch:User Stories}
+
+\todo[inline]{Buch link finden und dann hier erklären: Cohn, M.: User stories applied: for agile software development. Addison Wesley,  Redwood City (2004)}
+
+Unterthemen die erwähnt werden sollten: Format, Akzeptanzkriterien, INVEST, Detailgrad und Ambiguität
+
+\section{Large Language Models}\label{ch:Large Language Models}
+
+\todo[inline]{Keine Wiederholung der Grundlagen - hier geht es um die Begriffe welche im Kontext verwendet werden}
+
+Wichtige Begriffe:
+
+\begin{itemize}
+    \item Modell Größen, Parameter
+    \item Modell Typen
+    \item 
+\end{itemize}
+
+\todo[inline]{Evlt. auch kurze Historie, könnte aber besser in 4.0 aufgehoben sein.}
+
+\section{Code Generierung (NL2Code)}\label{ch:Code Generierung (NL2Code)}
+
+Fundamentale Grundlage dieser Arbeit ist die Generierung von Quellcode. Die Code-Generierung gilt es zunächst als Begriff in den groberen Themenbereich von Quellcode-nahen Aufgaben einzuordnen. Der Begriff wird ferner auch historisch im Bezug auf die Softwareentwicklung eingeordnet. Hier gilt es ebenfalls, LLMs in diesen Kontext einzuführen, da diese in der Gegenwart die relevantesten Werkzeuge für die Quellcodegenerierung darstellen.\todo[inline]{Cite the survey paper from 2025 which took this into account}
+
+\todo[inline]{evtl \ref{ch:Einordnung des Begriffs} und \ref{ch:Historische Entiwcklung} tauschen. Macht vlt mehr Sinn? idk.}
+
+\subsection{Einordnung des Begriffs}\label{ch:Einordnung des Begriffs}
+
+Quellcode-Generierung wie sie in dieser Arbeit betrachtet wird, fokussiert sich ausschließlich auf die Aufgabe, Natürlich-sprachigen Text (NL) in Quellcode zu transformieren. Daher wird ab diesem Kapitel die Abkürzung ''NL2Code'' (Natural language to code, Natürliche Sprache zu Code) verwendet. 
+
+\begin{table}[htbp]
+    \centering
+    % Erhöht den Zeilenabstand leicht für bessere Lesbarkeit
+    \renewcommand{\arraystretch}{1.3} 
+    
+    % Spaltendefinition: l = linksbündig, p{Breite} = Blocksatz mit festem Umbruch
+    \begin{tabular}{@{}lllp{8cm}@{}}
+        \toprule
+        \textbf{Typ} & \textbf{I-O} & \textbf{Aufgabe} & \textbf{Definition} \\
+        \midrule
+        
+        % --- Bereich 1: Understanding ---
+        \multirow{6}{*}{Verständniss} 
+        & \multirow{4}{*}{C-K} 
+        & Code Klassifizierung & Klassifizierung von Code-Schnipseln basierend auf deren Funktionalität, Zweck oder deren Attribute um bei der Organisation und Analyse zu helfen. \\
+        & & Bug Detektion & Detektieren und Diagnostizieren von Bugs oder Vulnerabilities im Code, zur sicherstellung von Funktionalität und der Sicherheit. \\
+        & & Klon Detektion & Identifizierung von Duplikaten oder ähnlichen Code Schnipseln um die Wartbarkeit zu verbessern, aber auch um Redundanzen zu entfernen und auf Plagiate zu überprüfen. \\
+        & & Exception Type Detection & Vorhersage von Exception Typen im Code um diese zu managen und bessern zu handlen. \\
+        \cmidrule{2-4}
+        & C-C & Code-to-Code Retrieval & Abruf relevanter Code Schnipsel basierend auf gegebenen Code Queries für die Weiterverwendung oder Analyse \\
+        \cmidrule{2-4}
+        & NL-C & Code Suche & Abruf relevanter Code Schnipsel basierend auf natürlicher Sprache (NL) für die Weiterverwendung oder Analyse \\
+        \midrule
+        
+        % --- Bereich 2: Generation ---
+        \multirow{7}{*}{Generation} 
+        & \multirow{5}{*}{C-C} 
+        & Code Verfollständigung & Vorhersage und Vorschlagung der nächsten Code Sektion aus einem gegebenem Kontext. Dieser beinhaltet kontextuelle Information vom Prefix (und Suffix). Dient der Verbesserung in der Entwicklungsgeschwindigkeit und Genauigkeit. \\
+        & & Code Übersetzung & Übersetzung von Code von einer Programmiersprache in eine andere, wobei Funktionalität und Logik erhalten bleiben. \\
+        & & Code Reparatur & Identifizieren und Lösen von Bugs im Code durch Generierung einer korrekten Version. Verbessert damit Funktionalität und Verlässlichkeit.  \\
+        & & Mutations Generation & Generierung von modifizierten Versionen von Code zur Evaluation von Test Strategien \\
+        & & Test Generation & Generation von Tests um Code hinsichtlich seiner Funktion, Performance und Robustikgeit zu prüfen. \\
+        \cmidrule{2-4}
+        & C-NL & Code Zusammenfassung & Gerenierung von Text Beschreibungen (NL) von Code um Verständniss und Dokumentation zu verbessern. \\
+        \cmidrule{2-4}
+        & NL-C & Code Generation & Generation von Code aus NL um Entwicklungsprozesse zu streamlinen und manuellen Aufwand zu reduzieren \\
+        \bottomrule
+    \end{tabular}
+    
+    % Das optionale Argument in den eckigen Klammern ist für das Tabellenverzeichnis
+    \caption[Anwendungsbereiche von Code-LLMs]{Anwendungsbereiche von Code-LLMs und deren spezifische Definitionen. Eigene Darstellung und Übersetzung in Anlehnung an \cite{jiangSurveyLargeLanguage2026}. Die I-O Spalte definiert für jede Aufgabe jeweils Input und Output. Die Abkürzungen sind wie folgt: Code (C), Label (K) und Natural Language (NL).
+    \todo{Passt nicht ordentlich auf Seite?}
+    }
+    \label{tab:code_llm_tasks}
+\end{table}
+
+Zur Einordnung gilt es zunächst Aufgaben von LLMs im Umgang mit Quellcode zu klassifizieren. Aus \tabref{tab:code_llm_tasks} gehen hier Übergeordnete Aufgabentypen \textit{Verständniss} und \textit{Generation} hervor. Gerade die Generation lässt sich in sehr unterschiedliche Aufgaben unterteilen. Vor allem für \rqref{RQ1} lässt sich aber ableiten dass das primäre Augenmerk auf NL2Code liegt. Wie wir in \todo{ref to agents} aber sehen werden, gehen moderne Generationsverfahren über diese Aufgabe hinaus. 
+% Dennoch kann hier eine explizite Abgrenzung getroffen werden, denn vor allem C-C (Code to Code) Aufgaben agieren nicht mit NL.
+
+\subsection{Historische Entwicklung}\label{ch:Historische Entwicklung}
+
+\todo[inline]{Kurze historische Einordnung basierend auf den Einordnungen der 3 Survey Paper (Zotero -> Master Projekt und Ordner 01)}
+
+\subsection{Umfang von Code-Generierung}\label{ch:Umfang von Code-Generierung}
+
+
+
+\todo[inline]{Folgende Kapitel müssen evtl. anders eingegliedert werden}
+
+\section{Prompting-Strategien und Agentensysteme}\label{ch:Prompting-Strategien und Agentensysteme}
+
+
+
+\subsection{Prompting-Verfahren}
+
+Für die Generierung von Code bietet sich immer NL als Grundlage welche initial an die Modelle geliefert werden. Auf der Suche nach einer Verbesserung dieses Mechanismus gibt es das Teilgebiet des ''Prompt-Engineering'' oder auch ''Instruction Tuning''\cite{jiangSurveyLargeLanguage2026}.  In diesem Paper werden verschiedene Strategien des Prompt-Engineering referenziert, daher folgt hier zunächst eine Erläuterung.
+
+\subsubsection{Frühe Prompt-Engineering Verfahren}\label{ch:prompting:early}
+
+Bereits 2020 beschreibt \cite{brownLanguageModelsAre2020} folgende Verfahren des Prompt-Engineerings:
+
+\begin{enumerate}
+    \item \textbf{Fine-Tuning} \\ Die Gewichte\todo{weights!} eines zugrundeliegenden Modells werden vor der Ausführung einer Aufgabe basierend auf gelabelten Daten verändert. Diese Daten werden vorher so kuriert dass sie nach Änderung der Gewichte bessere Ergebnisse bei der Ausführung von Aufgaben erbringen. Diese Methode bietet vor allem auf Benchmarks hohe Ergebnisse, leidet allerdings in generellen Kontexten.
+    \item \textbf{Few-Shot Prompting} \\ Dem Modell werden zur Inferenz-Zeit Beispiel Lösungen von Aufgaben gegeben. Das ''few'' bezieht sich auf die Größe $K$, die definiert wie viele Beispiele (in Abhängigkeit zum Kontextfenster des Modells) gezeigt werden. Diese Methode benötigt deutlich weniger Daten als das \textit{Fine-Tuning}, hat allerdings auch schlechtere Ergebnisse.
+    \item \textbf{One-Shot Prompting} \\ Ein Beispiel für einen \textit{Few-Shot} Prompt bei dem das $K$ fest gelegt wird, in diesem Falle also $K=1$.
+    \item \textbf{Zero-Shot Prompting} \\ Dem Modell wird lediglich die Aufgabe in NL übergeben. Es gibt keine Beispiele und keine Modifikation der Gewichte. Diese Methode genießt keiner der bisherigen Vorteile. 
+\end{enumerate}
+
+\subsubsection{Chain-of-Thought}
+
+Dass in \cite{weiChainofThoughtPromptingElicits2022} präsentierte Verfahren ''Chain of Thought'' (oft auch CoT), beschreibt eine Prompting Strategie in welcher ein Modell die Anweisung erhält, vor Ausgabe einer Antwort zunächst NL basierte Inferenz Schritte zu tätigen. In solchen Schritten werden Aufgaben zunächst in Einzelteile heruntergebrochen und werden somit überschaubarer. Die Anwendung dieser Strategie findet sich bei Modellen mit einer ausreichender Größe via initialer Prompts, ähnlich dem Verfahren des \textit{Few-Shot Prompting}. Das Resultat dieser Strategie ist eine starke Verbesserung der Benchmark Ergebnisse.
+
+\subsubsection{Self-Refine / iterative Verfeinerung}
+
+\todo[inline]{Nur falls gebraucht}
+
+\subsubsection{RAG}
+
+\todo[inline]{Wird gebraucht auch wenn nicht selbst verwendet.}
+
+\subsection{Agenten, Rollen, Werkzeuge, Harness}
+
+
+
+\subsection{Autonomie}\todo{Titel ausbaubar tbh}
+
+\section{Evaluation von Code-Generierung}\label{ch:Evaluation von Code-Generierung}
+
+Bis dato wurden die Facetten der Generierung von Quellcode erklärt. Es stellt sich allerdings die Frage: welches Modell / welches System ist das ''beste''? Um diese Frage fundiert beantworten zu können, bedarf es einem Vergleich. Üblicher Weise, erfolgt ein solcher Vergleich in einer Umgebung die allen Kandidaten gleiche Aufgaben stellt und deren Lösungen ebenfalls gleich evaluiert.
+
+\subsection{Metriken}\label{ch:Metriken}
+
+Bevor der explizite Vergleich von Code-Generierungs Anwendungen betrachtet werden kann, muss zuerst erläutert werden, wie die Ergebnisse einer solche Evaluation außgedrückt werden. Zu diesem Zweck gibt es verschiedene Metriken, welche wir im Verlauf der Arbeit aufwinden werden.
+
+\subsubsection{Ausführungsbasierte Metriken}
+
+\todo[inline]{pass@k}
+
+\subsubsection{Ähnlichkeitsbasierte Metriken}
+
+\todo[inline]{BLEU, CodeBLEU, SketchBLEU}
+
+\subsection{Benchmarks und Datensätze}\label{ch:Benchmarks und Datensätze}
+
+Im Kontext dieser Arbeit und der Code-Generierung dienen Benchmarks als Evaluationsplatform. Im Grunde müssen Benchmarks folgenden Ablauf bereit stellen:
+
+\begin{enumerate}
+    \item Eingabe von Anforderungen an die zu evaluierende Software
+    \item Entgegennehmen der generierten Artefakte
+    \item Ausführung der eigens definierten Evaluation
+\end{enumerate}
+
+Diese Grundbausteine sind mitunter sehr unterschiedlich definiert und decken weiterhin verschiedene Aufgaben und Rahmen ab. 
+
+\todo[inline]{Definition der Rahmenbedierungen etc.}
+
+\subsection{Probleme der Validität}\label{ch:Probleme der Validität}
+
+\todo[inline]{Datenkontamination, Budget}
+
+\section{Weitere Begriffsverwendung in dieser Arbeit}
+
+\todo[inline]{Evtl. ''baseline'' erklären.}
+
+% \controlquestions{
+% Dieses Kapitel bildet das Fundament der Abschlussarbeit. 
+% Hier werden zentrale Fachbegriffe, Theorien, Modelle und Konzepte erläutert, die später in der Arbeit angewendet, weiterentwickelt oder hinterfragt werden. 
+% Ziel ist es, ein gemeinsames, verständliches, und eindeutiges Begriffsverständnis herzustellen sowie den wissenschaftlichen Rahmen der Arbeit transparent zu machen.
+% \begin{enumerate}
+%     \item Wurden alle relevanten Begriffe der Arbeit hier konkret definiert und verständlich erklärt?
+%     \item Sind alle Definitionen formal und präzise definiert oder wurden sie auf bestehende Literatur zurückgeführt? Sind alle zitierten Definitionen, Modelle und Theorien korrekt belegt (mit Zitaten aus relevanter Fachliteratur)?
+%     \item Wird zwischen eigener Darstellung und wörtlicher/paraphrasierter Übernahme aus Quellen klar unterschieden?
+%     \item Werden relevante Klassiker und aktuelle Quellen ausgewogen berücksichtigt?
+%     \item Werden ggf. Synonyme, Mehrdeutigkeiten oder abweichende Begriffsverwendungen thematisiert?
+%     \item Ist nachvollziehbar, warum genau diese theoretischen Grundlagen ausgewählt wurden?
+%     \item Ist der gewählte Begriffsgebrauch einheitlich und konsistent über die gesamte Arbeit hinweg?
+%     \item Wird der spätere Bezug (z.\,B.~in der Analyse, Diskussion, Umsetzung) vorbereitet und angedeutet?
+%     \item Ist das Kapitel logisch aufgebaut und gut strukturiert (z.\,B.~vom Allgemeinen zum Spezifischen)?
+%     \item Werden komplexe Sachverhalte verständlich und anschaulich erklärt (z.\,B.~durch Beispiele oder Abbildungen)?
+%     \item Ist das Kapitel sprachlich präzise und klar formuliert, ohne unnötige Wiederholungen oder Füllmaterial?
+% \end{enumerate}
+% }
+

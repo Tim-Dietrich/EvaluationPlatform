@@ -1,0 +1,144 @@
+\addchap*{Selbstständigkeitserklärung}
+
+%\color{hsadarkgrayblue}{
+%	\Headerfamily\bfseries\LARGE{}Selbstständigkeitserklärung
+%}
+
+\color{black}
+\vspace{10mm}
+
+Hiermit erkläre ich, dass die Arbeit selbstständig verfasst, in gleicher oder ähnlicher Fassung noch nicht in einem anderen Studiengang als Prüfungsleistung vorgelegt wurde und keine anderen, als die angegebenen Hilfsmittel und Quellen, einschließlich der angegebenen und beschriebenen Software, verwendet wurden.
+%
+\vspace{20mm}
+
+\begin{minipage}{\linewidth}
+%\fbox{
+	\begin{minipage}{.30\linewidth}
+		\underline{
+			\makebox[.9\linewidth]{
+				\mbox{
+					Leipzig, \thesisDate
+				}\hfill
+			}
+		}
+		\makebox[.9\linewidth]{
+			\mbox{\centering\small{Ort, Datum}}
+		}
+	\end{minipage}
+%}
+	\hfill
+%\fbox{
+	\begin{minipage}{.65\linewidth}
+		\underline{
+			\makebox[.9\linewidth]{
+				\phantom{Leipzig, \thesisDate}\hfill
+			}
+		}
+		\makebox[.9\linewidth]{
+			\mbox{\small{Unterschrift der einreichenden Person}}\hfill
+		}
+	\end{minipage}	
+%}
+\end{minipage}
+
+\vspace{20mm}
+
+\ifShowSperrvermerk
+{%\color{bblue}{
+	\bfseries\LARGE{}Sperrvermerk
+%}
+}
+
+\color{black}
+\vspace{10mm}
+
+\begin{minipage}{\linewidth}
+%\fbox{
+	\begin{minipage}{.35\linewidth}
+        \ 
+	\end{minipage}
+%}
+%\fbox{
+	\begin{minipage}{.3\linewidth}
+		Ja
+		\ifthenelse{
+			\equal{True}{\istgesperrt}
+		}{
+			\fbox{\mbox{\Huge{X}}}
+		}{
+			\fbox{\mbox{\phantom{\Huge{X}}}}
+		}
+	\end{minipage}
+%}
+%\fbox{
+	\begin{minipage}{.3\linewidth}
+		Nein
+		\ifthenelse{
+			\equal{True}{\istgesperrt}
+		}{
+			\fbox{\mbox{\phantom{\Huge{X}}}}
+		}{
+			\fbox{\mbox{\Huge{X}}}
+		}
+	\end{minipage}
+%}
+\end{minipage}
+
+\vspace{5mm}
+
+\ifthenelse{
+	\equal{\CompanyName}{}
+}{
+	\def\sperrtext{Der Inhalt dieser Arbeit darf Dritten ohne Genehmigung von \erstergutachter~ nicht zugänglich gemacht werden. Dieser Sperrvermerk gilt für die Dauer von \sperrdauer~Jahren.}
+}{
+	\def\sperrtext{Der Inhalt der Arbeit darf Dritten ohne Genehmigung der/des \namedesunternehmens~nicht zugänglich gemacht werden. Dieser Sperrvermerk gilt für die Dauer von \sperrdauer~Jahren.}
+}
+
+\ifthenelse{
+	\equal{True}{\istgesperrt}
+}{
+	\sperrtext
+}{
+}
+
+
+\vspace{20mm}
+
+\begin{minipage}{\linewidth}
+%\fbox{
+	\begin{minipage}{.30\linewidth}
+		\underline{
+			\makebox[.9\linewidth]{
+				\mbox{
+					Leipzig, \thesisDate
+				}\hfill
+			}
+		}
+		\makebox[.9\linewidth]{
+			\mbox{\centering\small{Ort, Datum}}
+		}
+	\end{minipage}
+%}
+	\hfill
+%\fbox{
+	\begin{minipage}{.65\linewidth}
+		\underline{
+			\makebox[.9\linewidth]{
+				\phantom{Leipzig, \thesisDate}\hfill
+			}
+		}
+		\makebox[.9\linewidth]{
+			\mbox{\small{Unterschrift der betreuenden Person des  Unternehmens \CompanyName}}\hfill
+		}
+	\end{minipage}	
+%}
+\end{minipage}
+\fi
+
+% \controlquestions{
+% \begin{enumerate}
+%     \item Wurde die Arbeit bei einem Unternehmen durchgeführt? (\texttt{ifShowSperrvermerk} konfigurieren)
+% \end{enumerate}
+% }
+
+\vspace{60mm}

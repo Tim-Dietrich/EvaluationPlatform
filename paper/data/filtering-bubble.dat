@@ -1,0 +1,7 @@
+x y size label
+88.3 11 500 bert
+86.3 8.1 450 distilbert
+45.3 13.5 400 zephyr7b
+49.6 13.7 420 mistral7b
+83.3 15.2 390 gpt35
+89.2 13.4 350 gpt4

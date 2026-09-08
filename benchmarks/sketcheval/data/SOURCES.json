@@ -1,0 +1,30 @@
+{
+  "note": "SketchEval is not published as a dataset anywhere: it exists as a directory inside the CodeS repository, which this project already pins as a submodule for the solution under test. The tasks are therefore generated from that commit rather than from a downloaded archive, and the digest below pins what they are generated from. scripts/build_sketcheval_tasks.py verifies it before writing anything.",
+  "sources": [
+    {
+      "path": "validation/cleaned_repos",
+      "repository": "https://github.com/NL2Code/CodeS.git",
+      "commit": "0b624ab4ef22b0d9d223f274a986eb27fe090c88",
+      "sha256": "0516fbecdcaa6ce5d5260698268e858754b6e4b9cf7621b60eb455566d172c3b",
+      "files": 228,
+      "bytes": 1411079,
+      "repos": 19,
+      "retrieved": "2026-09-06",
+      "license": "see the upstream repository; each subdirectory is a third-party open-source project vendored by the CodeS authors",
+      "why": "The whole of SketchEval's Python half: nineteen repositories, each a README.md that is the task's entire specification and a source tree that is the reference the generated repository is scored against. The multilingual half of the paper is not vendored upstream - validation/multilingual-repos holds a table of links and no code - so this is SketchEval as the repository actually ships it.",
+      "how": "Read with 'git archive' at the commit above under 'core.autocrlf=false' and 'core.eol=lf', which reproduces the stored blob bytes exactly. The working tree is not read: this checkout has core.autocrlf=true, so 221 of the 228 files carry CRLF on disk and a digest taken from them would pin the checkout rather than the commit."
+    }
+  ],
+  "metric": {
+    "path": "validation/evaluation_scripts/codebleu",
+    "commit": "0b624ab4ef22b0d9d223f274a986eb27fe090c88",
+    "why": "SketchBLEU is 'calc_repobleu', which exists only in the CodeS authors' fork of codebleu - the package of that name on PyPI has no such function. It is not vendored here: the task image clones it from the commit above, so the metric a run scored with is pinned by the same commit as the tool under test and cannot drift from it. What pins it in the generated tree is the Dockerfile that names the commit.",
+    "runtime": {
+      "tree-sitter": "==0.21.3",
+      "setuptools": "==75.8.0",
+      "scipy": "==1.14.1",
+      "numpy": "==2.1.3"
+    },
+    "runtime_why": "tree-sitter below 0.22 because the fork calls 'Language.build_library' and the two-argument 'Language(so_path, name)', both removed there. setuptools exactly 75.8.0 because 'build_library' constructs its compiler with 'new_compiler()' and never calls 'customize_compiler()', so the link flags are whatever UnixCCompiler's class defaults carry; setuptools 79 restructured that module and dropped '-shared' from the C++ linker default, which links the grammars as an executable and fails on a missing 'main'."
+  }
+}

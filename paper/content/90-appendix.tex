@@ -1,0 +1,52 @@
+% !TEX root = ../my-thesis.tex
+%
+\chapter{Appendix}\label{sec:appendix}
+
+% Style für prompt Darstellung
+\lstdefinestyle{promptstyle}{
+  basicstyle=\ttfamily\footnotesize,
+  columns=fullflexible,
+  keepspaces=true,
+  upquote=true,
+  showstringspaces=false,
+  breaklines=true,
+  breakindent=0pt,
+  breakautoindent=false,
+  postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space},
+  frame=single,
+  rulecolor=\color{gray!50},
+  xleftmargin=0pt,
+  numbers=none,
+  captionpos=b,
+}
+
+\section{Single-Shot Prompt}\label{sec:appendix:single-shot-prompt}
+
+\begin{lstlisting}[style=promptstyle,
+                   caption={Ausgabeprotokoll der Single-Shot-Solution
+                            (Python-Konstante \texttt{FORMAT\_INSTRUCTION});
+                            wird der Task-Beschreibung unverändert angehängt.},
+                   label={lst:prompt-singleshot}]
+Write out the complete project, one file at a time. Introduce each file with a
+line naming its path, then give that file's entire contents in a fenced code
+block:
+
+### FILE: src/example/core.py
+```python
+def add(left: int, right: int) -> int:
+    return left + right
+```
+
+- Paths are relative to the project root: `pyproject.toml` belongs at
+  `pyproject.toml`, not inside a directory named after the project.
+- Where the specification shows a directory tree, its top-level directory is
+  the project root itself and not a directory to create.
+- No absolute paths, and no `..`.
+- Include every file the project needs in order to be installed and used,
+  packaging and configuration among them.
+- Write each file out in full. Do not abbreviate a body to a comment, and do
+  not leave a placeholder to be filled in later.
+- If a file's own contents contain a fenced code block, fence that file with
+  more backticks than appear anywhere inside it.
+- Only the file blocks are read. Any other text is ignored.
+\end{lstlisting}

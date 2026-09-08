@@ -1,0 +1,125 @@
+% !TEX root = ../my-thesis.tex
+%
+% ------------------------------------  
+% ------------------------------------  
+% --> cover title page
+% THIS PAGE IS NOT REQUIRED BUT MIGHT BE USEFUL IF 
+% ------------------------------------  
+% ------------------------------------  
+\ifShowExtraTitlePage % use this flag for enabling or disabling this extra cover page
+\begin{titlepage}
+        \todo[inline]{Diese Seite kann mit ShowExtraTitlePagefalse deaktiviert werden.}
+	\pdfbookmark[0]{Cover}{Cover}
+	\flushright
+	\hfill
+	\vfill
+	{\LARGE\thesisTitle \par}
+	\rule[5pt]{\textwidth}{.4pt} \par
+	{\Large\thesisName}
+	\vfill
+	\textit{\large\thesisDate} 
+    \ifShowVersionOnExtraTitlePage        
+        \\
+	Version: \thesisVersion
+        \todo[inline]{Versionsdarstellung kann mit ShowVersionOnExtraTitlePagefalse deaktiviert werden.}
+    \fi
+\end{titlepage}
+\fi
+
+% ------------------------------------  --> main title page
+\begin{titlepage}
+	\pdfbookmark[0]{Titlepage}{Titlepage}
+	\tgherosfont
+	\centering
+
+	%{\Large \thesisUniversity} \\[4mm]
+        %  trim={left bottom right top},clip
+	\includegraphics[width=6cm,trim={0 3cm 0 0},clip]{gfx/logos/HTWK_Zusatz_de_V_Black_K.eps} \\[2mm]
+	\textsf{\thesisUniversityDepartment} \\
+	%\textsf{\thesisUniversityInstitute} \\
+	%\textsf{\thesisUniversityGroup} \\
+
+	\vfill
+	{\large \thesisSubject} \\[4mm]
+	{\LARGE \color{ctcolortitle}\textbf{\thesisTitle} \\[10mm]}
+
+    % \an{This title is too long and does not fit. Better: Multilingual Question Answering on Knowledge Graphs}
+	{\Large \thesisName} \\[15mm]
+%\textsf{to the} \\
+%{Faculty of Computer Science, Electrical Engineering and Mathematics} \\
+%\textsf{of}\\
+%{Paderborn University}\\
+%\textsf{}\\ INFO: removed because not necessary
+%\textsf{Abschlussarbeit zur Erlangung des akademischen Grades\\Master of Science (M.\,Sc.)}\\
+{}
+	\vfill
+	\begin{minipage}[t]{.27\textwidth}
+		\raggedleft
+		\textit{Betreuer}
+	\end{minipage}
+	\hspace*{15pt}
+	\begin{minipage}[t]{.65\textwidth}
+		{\large \thesisFirstReviewer} \\
+	  	{\small \thesisFirstReviewerDepartment} \\[-1mm]
+		{\small \thesisFirstReviewerUniversity}
+	\end{minipage} \\[4mm]
+    % INFO: removed because there is only 1 reviewer
+	% \begin{minipage}[t]{.27\textwidth}
+	% 	\raggedleft
+	% 	\textit{2. Betreuer}
+	% \end{minipage}
+	% \hspace*{15pt}
+	% \begin{minipage}[t]{.65\textwidth}
+	% 	{\large \thesisSecondReviewer} \\
+	%   	{\small \thesisSecondReviewerDepartment} \\[-1mm]
+	% 	{\small \thesisSecondReviewerUniversity}
+	% \end{minipage} \\[4mm]
+ %        \begin{minipage}[t]{.27\textwidth}
+	% 	\raggedleft
+	% 	\textit{3. Betreuer}
+	% \end{minipage}
+	% \hspace*{15pt}
+	% \begin{minipage}[t]{.65\textwidth}
+	% 	{\large \thesisThirdReviewer} \\
+	%   	{\small \thesisThirdReviewerDepartment} \\[-1mm]
+	% 	{\small \thesisThirdReviewerUniversity}
+	% \end{minipage} \\ [4mm]
+%	\begin{minipage}[t]{.27\textwidth}
+%		\raggedleft
+%		\textit{Supervisors}
+%	\end{minipage}
+%	\hspace*{15pt}
+%	\begin{minipage}[t]{.65\textwidth}
+%		\thesisFirstSupervisor \\  \thesisSecondSupervisor
+%	\end{minipage} \\[5mm]
+        \vspace*{4ex}
+	\begin{minipage}[t]{.27\textwidth}
+		\raggedleft
+		\textit{Einreichungsdatum:}
+	\end{minipage}
+	\hspace*{15pt}
+	\begin{minipage}[t]{.65\textwidth}
+	  	{\small \thesisDate}
+	\end{minipage} \\[4mm]
+    \todoinline{Diese Seite kann in der Datei \texttt{my-thesis-setup.tex}\ konfiguriert werden.}
+\end{titlepage}
+
+
+% ------------------------------------  --> lower title back for single page layout
+\hfill
+\vfill
+{
+    \small
+    \textbf{\thesisName} \\
+    \textit{\thesisTitle} \\
+    \thesisSubject, \thesisDate \\
+    Betreuer: \thesisFirstReviewer\\[1.5em]
+    \textbf{\thesisUniversity} \\
+    \textit{\thesisUniversityGroup} \\
+    \thesisUniversityInstitute \\
+    \thesisUniversityDepartment \\
+    \thesisUniversityStreetAddress \\
+    \thesisUniversityPostalCode\ \thesisUniversityCity
+    \todoinline{Diese Seite kann in der Datei \texttt{my-thesis-setup.tex}\ konfiguriert werden. Hinweisboxen werden durch \Verb"\presetkeys{todonotes}{disable}{}" in der Präamble deaktiviert.
+    Weitere Hilfen sind unter \href{https://wse-research.org/static-content/documents/Handout\%20-\%20Hinweise\%20zu\%20Ausarbeitung\%20einer\%20Abschlussarbeit\%20-\%20Andreas\%20Both.pdf}{https://wse-research.org/static-content/documents/Handout\%20-\%20Hinweise\%20zu\%20Ausarbeitung\%20einer\%20Abschlussarbeit\%20-\%20Andreas\%20Both.pdf} abrufbar.}
+}

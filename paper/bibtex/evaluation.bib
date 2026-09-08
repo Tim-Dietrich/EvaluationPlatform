@@ -1,0 +1,182 @@
+@misc{chenEvaluatingLargeLanguage2021,
+  title = {Evaluating {{Large Language Models Trained}} on {{Code}}},
+  author = {Chen, Mark and Tworek, Jerry and Jun, Heewoo and Yuan, Qiming and Pinto, Henrique Ponde de Oliveira and Kaplan, Jared and Edwards, Harri and Burda, Yuri and Joseph, Nicholas and Brockman, Greg and Ray, Alex and Puri, Raul and Krueger, Gretchen and Petrov, Michael and Khlaaf, Heidy and Sastry, Girish and Mishkin, Pamela and Chan, Brooke and Gray, Scott and Ryder, Nick and Pavlov, Mikhail and Power, Alethea and Kaiser, Lukasz and Bavarian, Mohammad and Winter, Clemens and Tillet, Philippe and Such, Felipe Petroski and Cummings, Dave and Plappert, Matthias and Chantzis, Fotios and Barnes, Elizabeth and {Herbert-Voss}, Ariel and Guss, William Hebgen and Nichol, Alex and Paino, Alex and Tezak, Nikolas and Tang, Jie and Babuschkin, Igor and Balaji, Suchir and Jain, Shantanu and Saunders, William and Hesse, Christopher and Carr, Andrew N. and Leike, Jan and Achiam, Josh and Misra, Vedant and Morikawa, Evan and Radford, Alec and Knight, Matthew and Brundage, Miles and Murati, Mira and Mayer, Katie and Welinder, Peter and McGrew, Bob and Amodei, Dario and McCandlish, Sam and Sutskever, Ilya and Zaremba, Wojciech},
+  year = 2021,
+  month = jul,
+  number = {arXiv:2107.03374},
+  eprint = {2107.03374},
+  primaryclass = {cs.LG},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2107.03374},
+  urldate = {2026-08-06},
+  abstract = {We introduce Codex, a GPT language model fine-tuned on publicly available code from GitHub, and study its Python code-writing capabilities. A distinct production version of Codex powers GitHub Copilot. On HumanEval, a new evaluation set we release to measure functional correctness for synthesizing programs from docstrings, our model solves 28.8\% of the problems, while GPT-3 solves 0\% and GPT-J solves 11.4\%. Furthermore, we find that repeated sampling from the model is a surprisingly effective strategy for producing working solutions to difficult prompts. Using this method, we solve 70.2\% of our problems with 100 samples per problem. Careful investigation of our model reveals its limitations, including difficulty with docstrings describing long chains of operations and with binding operations to variables. Finally, we discuss the potential broader impacts of deploying powerful code generation technologies, covering safety, security, and economics.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Machine Learning},
+  file = {C\:\\Users\\timdi\\Zotero\\storage\\P523PG4N\\Chen et al. - 2021 - Evaluating Large Language Models Trained on Code.pdf;C\:\\Users\\timdi\\Zotero\\storage\\JYEI5GQW\\2107.html}
+}
+
+@misc{chenSurveyEvaluatingLarge2025,
+  title = {A {{Survey}} on {{Evaluating Large Language Models}} in {{Code Generation Tasks}}},
+  author = {Chen, Liguo and Guo, Qi and Jia, Hongrui and Zeng, Zhengran and Wang, Xin and Xu, Yijiang and Wu, Jian and Wang, Yidong and Gao, Qing and Wang, Jindong and Ye, Wei and Zhang, Shikun},
+  year = 2025,
+  month = mar,
+  number = {arXiv:2408.16498},
+  eprint = {2408.16498},
+  primaryclass = {cs},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2408.16498},
+  urldate = {2026-05-06},
+  abstract = {This paper provides a comprehensive review of the current methods and metrics used to evaluate the performance of Large Language Models (LLMs) in code generation tasks. With the rapid growth in demand for automated software development, LLMs have demonstrated significant potential in the field of code generation. The paper begins by reviewing the historical development of LLMs and their applications in code generation. Next, it details various methods and metrics for assessing the code generation capabilities of LLMs, including code correctness, efficiency, readability, and evaluation methods based on expert review and user experience. The paper also evaluates the widely used benchmark datasets, identifying their limitations and proposing directions for future improvements. Specifically, the paper analyzes the performance of code generation models across different tasks by combining multiple evaluation metrics, such as code compilation/interpretation success rates, unit test pass rates, and performance and efficiency metrics, to comprehensively assess the practical application of LLMs in code generation. Finally, the paper discusses the challenges faced in evaluating LLMs in code generation, particularly how to ensure the comprehensiveness and accuracy of evaluation methods and how to adapt to the evolving practices of software development. These analyses and discussions provide valuable insights for further optimizing and improving the application of LLMs in code generation tasks.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Software Engineering},
+  file = {C\:\\Users\\timdi\\Zotero\\storage\\98CNYAE5\\Chen et al. - 2025 - A Survey on Evaluating Large Language Models in Code Generation Tasks.pdf;C\:\\Users\\timdi\\Zotero\\storage\\X44I5V3S\\2408.html}
+}
+
+@article{dengSWEBenchProCan,
+  title = {{{SWE-Bench Pro}}: {{Can AI Agents Solve Long-Horizon Software Engineering Tasks}}?},
+  author = {Deng, Xiang and Da, Jeff and Pan, Edwin and He, Yannis Yiming and Ide, Charles and Garg, Kanak and Lauffer, Niklas and Park, Andrew and Rane, Chetan and Sampath, Karmini and Krishnan, Maya and Kundurthy, Srivatsa and Hendryx, Sean and Wang, Zifan and Zhang, Chen Bo Calvin and Jacobson, Noah and Liu, Bing and Kenstler, Brad},
+  abstract = {We introduce SWE-BENCH PRO, a substantially more challenging benchmark that builds upon the best practices of SWE-Bench [25], but is explicitly designed to capture realistic, complex, enterprise-level problems beyond the scope of SWE-Bench. SWE-BENCH PRO contains 1,865 problems sourced from a diverse set of 41 actively maintained repositories spanning business applications, B2B services, and developer tools. The benchmark is partitioned into a public set with open access to problems sourced from 11 repositories, a held-out set of 12 repositories and a commercial set of 18 proprietary repositories where we have formal partnership agreements with early-stage startups. Problems in the held-out and the commercial set are not publicly accessible, but we release results on the commercial set. Our benchmark features long-horizon tasks that may require hours to days for a professional software engineer to complete, often involving patches across multiple files and substantial code modifications. All tasks are human-verified and augmented with sufficient context to ensure resolvability. In our evaluation of widely used coding models, under a unified scaffold, we observe that their performance on SWE-BENCH PRO remains below 25\% (Pass@1), with GPT-5 achieving the highest score to date at 23.3\%. To better understand these limitations, we cluster the failure modes observed in the collected agent trajectories for a clearer characterization of the error patterns exhibited by current models. Overall, SWE-BENCH PRO provides a contamination-resistant testbed that more faithfully captures the complexity and diversity of real-world software development, advancing the pursuit of truly autonomous software engineering agents at a professional level.},
+  langid = {english},
+  file = {C:\Users\timdi\Zotero\storage\MDQH7MC4\Deng et al. - SWE-Bench Pro Can AI Agents Solve Long-Horizon Software Engineering Tasks.pdf}
+}
+
+@misc{dingNL2RepoBenchLongHorizonRepository2026,
+  title = {{{NL2Repo-Bench}}: {{Towards Long-Horizon Repository Generation Evaluation}} of {{Coding Agents}}},
+  shorttitle = {{{NL2Repo-Bench}}},
+  author = {Ding, Jingzhe and Long, Shengda and Pu, Changxin and Zhou, Huan and Gao, Hongwan and Gao, Xiang and He, Chao and Hou, Yue and Hu, Fei and Li, Zhaojian and Shi, Weiran and Wang, Zaiyuan and Zan, Daoguang and Zhang, Chenchen and Zhang, Xiaoxu and Chen, Qizhi and Cheng, Xianfu and Deng, Bo and Gu, Qingshui and Hua, Kai and Lin, Juntao and Liu, Pai and Li, Mingchen and Pan, Xuanguang and Peng, Zifan and Qin, Yujia and Shan, Yong and Tan, Zhewen and Xie, Weihao and Wang, Zihan and Yuan, Yishuo and Zhang, Jiayu and Zhao, Enduo and Zhao, Yunfei and Zhu, He and Zhu, Liya and Zou, Chenyang and Ding, Ming and Jiao, Jianpeng and Liu, Jiaheng and Liu, Minghao and Liu, Qian and Tao, Chongyang and Yang, Jian and Yang, Tong and Zhang, Zhaoxiang and Chen, Xinjie and Huang, Wenhao and Zhang, Ge},
+  year = 2026,
+  month = jan,
+  number = {arXiv:2512.12730},
+  eprint = {2512.12730},
+  primaryclass = {cs.CL},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2512.12730},
+  urldate = {2026-07-12},
+  abstract = {Recent advances in coding agents suggest rapid progress toward autonomous software development, yet existing benchmarks fail to rigorously evaluate the long-horizon capabilities required to build complete software systems. Most prior evaluations focus on localized code generation, scaffolded completion, or short-term repair tasks, leaving open the question of whether agents can sustain coherent reasoning, planning, and execution over the extended horizons demanded by real-world repository construction. To address this gap, we present NL2Repo Bench, a benchmark explicitly designed to evaluate the long-horizon repository generation ability of coding agents. Given only a single natural-language requirements document and an empty workspace, agents must autonomously design the architecture, manage dependencies, implement multi-module logic, and produce a fully installable Python library. Our experiments across state-of-the-art open- and closed-source models reveal that long-horizon repository generation remains largely unsolved: even the strongest agents achieve below 40\% average test pass rates and rarely complete an entire repository correctly. Detailed analysis uncovers fundamental long-horizon failure modes, including premature termination, loss of global coherence, fragile cross-file dependencies, and inadequate planning over hundreds of interaction steps. NL2Repo Bench establishes a rigorous, verifiable testbed for measuring sustained agentic competence and highlights long-horizon reasoning as a central bottleneck for the next generation of autonomous coding agents.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computation and Language},
+  file = {C\:\\Users\\timdi\\Zotero\\storage\\MC55RM5X\\Ding et al. - 2026 - NL2Repo-Bench Towards Long-Horizon Repository Generation Evaluation of Coding Agents.pdf;C\:\\Users\\timdi\\Zotero\\storage\\6H724Z9S\\2512.html}
+}
+
+@article{jimenezSWEbenchCanLanguage2024,
+  title = {{{SWE-bench}}: {{Can Language Models Resolve Real-world Github Issues}}?},
+  shorttitle = {{{SWE-bench}}},
+  author = {Jimenez, Carlos E. and Yang, John and Wettig, Alexander and Yao, Shunyu and Pei, Kexin and Press, Ofir and Narasimhan, Karthik},
+  year = 2024,
+  month = may,
+  journal = {International Conference on Learning Representations},
+  volume = {2024},
+  pages = {54107--54157},
+  urldate = {2026-08-06},
+  langid = {english},
+  file = {C:\Users\timdi\Zotero\storage\28ETCR56\Jimenez et al. - 2024 - SWE-bench Can Language Models Resolve Real-world Github Issues.pdf}
+}
+
+@misc{LargeScaleEvaluationAutomated,
+  title = {A {{Large-Scale Evaluation}} of {{Automated Unit Test Generation Using EvoSuite}} \textbar{} {{ACM Transactions}} on {{Software Engineering}} and {{Methodology}}},
+  urldate = {2026-05-24},
+  howpublished = {https://dl.acm.org/doi/abs/10.1145/2685612},
+  file = {C\:\\Users\\timdi\\Zotero\\storage\\RIEV597R\\A Large-Scale Evaluation of Automated Unit Test Generation Using EvoSuite  ACM Transactions on Soft.pdf;C\:\\Users\\timdi\\Zotero\\storage\\8MGZBXL2\\2685612.html}
+}
+
+@inproceedings{paulBenchmarksMetricsEvaluations2024,
+  title = {Benchmarks and {{Metrics}} for {{Evaluations}} of {{Code Generation}}: {{A Critical Review}}},
+  shorttitle = {Benchmarks and {{Metrics}} for {{Evaluations}} of {{Code Generation}}},
+  booktitle = {2024 {{IEEE International Conference}} on {{Artificial Intelligence Testing}} ({{AITest}})},
+  author = {Paul, Debalina Ghosh and Zhu, Hong and Bayley, Ian},
+  year = 2024,
+  month = jul,
+  pages = {87--94},
+  issn = {2835-3560},
+  doi = {10.1109/AITest62860.2024.00019},
+  urldate = {2026-05-06},
+  abstract = {With the rapid development of Large Language Models (LLMs), a large number of machine learning models have been developed to assist programming tasks including the generation of program code from natural language input. However, how to evaluate such LLMs for this task is still an open problem despite of the great amount of research efforts that have been made and reported to evaluate and compare them. This paper provides a critical review of the existing work on the testing and evaluation of these tools with a focus on two key aspects: the benchmarks and the metrics used in the evaluations. Based on the review, further research directions are discussed.},
+  keywords = {Automation,Benchmarks,Code generation,Codes,Large language models,Machine learning,Measurement,Metrics,Natural languages,Performance evaluation,Reviews},
+  file = {C:\Users\timdi\Zotero\storage\HVVX3Z4Y\10685214.html}
+}
+
+@inproceedings{setianiQualityEvaluationLLMbased2025,
+  title = {Quality {{Evaluation}} of {{LLM-based Generated Test Case}}: {{A Literature Review}}},
+  shorttitle = {Quality {{Evaluation}} of {{LLM-based Generated Test Case}}},
+  booktitle = {2025 {{IEEE International Conference}} on {{Data}} and {{Software Engineering}} ({{ICoDSE}})},
+  author = {Setiani, Novi and {Alifia}},
+  year = 2025,
+  month = oct,
+  pages = {425--430},
+  issn = {2640-0227},
+  doi = {10.1109/ICoDSE68111.2025.11351763},
+  urldate = {2026-05-24},
+  abstract = {Large Language Models (LLMs) are increasingly applied in automated test case generation. Unlike traditional testing, quality evaluation of their outputs requires novel approaches due to the non-deterministic nature of LLMs and the risks of bias and hallucination. This study conducts a systematic literature review of 25 publications (2020--2025) to examine quality criteria, evaluation metrics, and heuristics in LLM -based test case generation. Findings show that correctness/accuracy and coverage metrics remain dominant, yet there is a growing focus on bias and hallucination detection. Effective heuristics include human-in-the-loop evaluation, gold standard comparison, and multi-agent frameworks. The review highlights emerging frameworks integrating ethical and safety criteria, underscoring the need for comprehensive evaluation to ensure reliability and fairness in automated test generation.},
+  keywords = {Bias,Ethics,Hallucination,Human in the loop,Large language models,Large Language Models,Measurement,Quality Evaluation,Safety,Software engineering,Software reliability,Systematic literature review,Test Case Generation,Test pattern generators,Testing},
+  file = {C:\Users\timdi\Zotero\storage\2X2XTG8U\Setiani and Alifia - 2025 - Quality Evaluation of LLM-based Generated Test Case A Literature Review.pdf}
+}
+
+@misc{tempestvanschaikEvaluationMetrics,
+  title = {Evaluation Metrics},
+  author = {TempestVanSchaik},
+  urldate = {2026-05-06},
+  abstract = {Evaluating the performance of machine learning models is crucial for determining their effectiveness and reliability. To do that, quantitative measurement with reference to ground truth output (also known as evaluation metrics) are needed. However, LLM applications are a recent and fast evolving ML field, where model evaluation is not straightforward and there is no unified approach to measure LLM performance. Several metrics have been proposed in the literature for evaluating the performance of LLMs. It is essential to use the right metrics that are suitable for the problem we are attempting to solve.},
+  howpublished = {https://learn.microsoft.com/en-us/ai/playbook/technology-guidance/generative-ai/working-with-llms/evaluation/list-of-eval-metrics},
+  langid = {american},
+  file = {C:\Users\timdi\Zotero\storage\VPEEWTEE\list-of-eval-metrics.html}
+}
+
+@inproceedings{wangAgentbasedEvaluationFramework2025b,
+  title = {An {{Agent-based Evaluation Framework}} for {{Complex Code Generation}}},
+  booktitle = {2025 40th {{IEEE}}/{{ACM International Conference}} on {{Automated Software Engineering}} ({{ASE}})},
+  author = {Wang, Xinchen and Hu, Ruida and Gao, Pengfei and Peng, Chao and Gao, Cuiyun},
+  year = 2025,
+  month = nov,
+  pages = {2427--2439},
+  issn = {2643-1572},
+  doi = {10.1109/ASE63991.2025.00200},
+  urldate = {2026-08-12},
+  abstract = {Large language models (LLMs) have demonstrated strong capabilities in code generation, underscoring the critical need for rigorous and comprehensive evaluation. Existing evaluation approaches fall into three categories, including human-centered, metric-based, and LLM-based. Considering that human-centered approaches are labour-intensive and metric-based ones overly rely on reference answers, LLM-based approaches are gaining increasing attention due to their stronger contextual understanding capabilities. However, they generally evaluate the generated code based on static prompts, and tend to fail for complex code scenarios which typically involve multiple requirements and require more contextual information. In addition, these approaches lack fine-grained evaluation for complex code, resulting in limited explainability.To mitigate the limitations, we propose CodeVisionary, the first agent-based evaluation framework for complex code generation. CodeVisionary consists of two stages: (1) Requirement-guided multi-dimensional context distillation stage, which first formulates a detailed evaluation plan by decomposing task requirements, and then stepwise collects multi-dimensional contextual information for each requirement. (2) Fine-grained scoring and summarization stage, which defines self-directed and negotiation-based actions, allowing multiple judges to comprehend complex code from fine-grained and diverse viewpoints, and reach a consensus through discussion. A comprehensive evaluation report is also generated for enhanced explainability. For validation, we construct a new benchmark consisting of 363 samples spanning 37 coding scenarios and 23 programming languages. Extensive experiments demonstrate that CodeVisionary achieves the best performance among three baselines for evaluating complex code generation, outperforming the best baseline with average improvements of 0.217, 0.163, and 0.141 in Pearson, Spearman, and Kendall-Tau coefficients, respectively. The resources of CodeVisionary are available at https://github.com/Eshe0922/CodeVisionary.},
+  keywords = {AI agent,Benchmark testing,Code generation evaluation,Codes,Computer languages,Encoding,large language models,Large language models,Software engineering},
+  file = {C:\Users\timdi\Zotero\storage\8VDSCK34\Wang et al. - 2025 - An Agent-based Evaluation Framework for Complex Code Generation.pdf}
+}
+
+@misc{yangEvaluationLargeLanguage2024a,
+  title = {On the {{Evaluation}} of {{Large Language Models}} in {{Unit Test Generation}}},
+  author = {Yang, Lin and Yang, Chen and Gao, Shutao and Wang, Weijing and Wang, Bo and Zhu, Qihao and Chu, Xiao and Zhou, Jianyi and Liang, Guangtai and Wang, Qianxiang and Chen, Junjie},
+  year = 2024,
+  month = sep,
+  number = {arXiv:2406.18181},
+  eprint = {2406.18181},
+  primaryclass = {cs.SE},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2406.18181},
+  urldate = {2026-05-24},
+  abstract = {Unit testing is an essential activity in software development for verifying the correctness of software components. However, manually writing unit tests is challenging and time-consuming. The emergence of Large Language Models (LLMs) offers a new direction for automating unit test generation. Existing research primarily focuses on closed-source LLMs (e.g., ChatGPT and CodeX) with fixed prompting strategies, leaving the capabilities of advanced open-source LLMs with various prompting settings unexplored. Particularly, open-source LLMs offer advantages in data privacy protection and have demonstrated superior performance in some tasks. Moreover, effective prompting is crucial for maximizing LLMs' capabilities. In this paper, we conduct the first empirical study to fill this gap, based on 17 Java projects, five widely-used open-source LLMs with different structures and parameter sizes, and comprehensive evaluation metrics. Our findings highlight the significant influence of various prompt factors, show the performance of open-source LLMs compared to the commercial GPT-4 and the traditional Evosuite, and identify limitations in LLM-based unit test generation. We then derive a series of implications from our study to guide future research and practical use of LLM-based unit test generation.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Software Engineering},
+  file = {C\:\\Users\\timdi\\Zotero\\storage\\W4BNF2CP\\Yang et al. - 2024 - On the Evaluation of Large Language Models in Unit Test Generation.pdf;C\:\\Users\\timdi\\Zotero\\storage\\FP59GBHM\\2406.html}
+}
+
+@article{zhengJudgingLLMasaJudgeMTBench2023,
+  title = {Judging {{LLM-as-a-Judge}} with {{MT-Bench}} and {{Chatbot Arena}}},
+  author = {Zheng, Lianmin and Chiang, Wei-Lin and Sheng, Ying and Zhuang, Siyuan and Wu, Zhanghao and Zhuang, Yonghao and Lin, Zi and Li, Zhuohan and Li, Dacheng and Xing, Eric and Zhang, Hao and Gonzalez, Joseph and Stoica, Ion},
+  year = 2023,
+  month = dec,
+  journal = {Advances in Neural Information Processing Systems},
+  volume = {36},
+  pages = {46595--46623},
+  urldate = {2026-05-24},
+  langid = {english},
+  file = {C:\Users\timdi\Zotero\storage\9XX7MCRI\Zheng et al. - 2023 - Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.pdf}
+}
+
+@misc{GitHubMultimodalartprojectionNL2RepoBench2026,
+  title = {{{GitHub}} - Multimodal-Art-Projection/{{NL2RepoBench}} {$\cdot$} {{GitHub}}},
+  year = 2026,
+  month = sep,
+  urldate = {2026-09-02},
+  howpublished = {https://web.archive.org/web/20260902182812/https://github.com/multimodal-art-projection/NL2RepoBench}
+}
+
+@misc{HarborHub,
+  title = {Harbor {{Hub}}},
+  urldate = {2026-09-02},
+  howpublished = {https://web.archive.org/web/20260902183226/https://hub.harborframework.com/datasets/nl2repobench/nl2repobench/latest},
+  file = {C:\Users\timdi\Zotero\storage\PIRNZA7N\latest.html}
+}

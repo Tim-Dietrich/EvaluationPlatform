@@ -1,0 +1,372 @@
+% !TEX root = my-thesis.tex
+
+
+% **************************************************
+% Files' Character Encoding
+% **************************************************
+\PassOptionsToPackage{utf8}{inputenc}
+\usepackage[T2A,T1]{fontenc}
+\usepackage{inputenc}
+\usepackage{booktabs}
+\usepackage{minted}
+\usepackage{makecell}
+\usepackage{multirow}
+\usepackage[colorinlistoftodos,prependcaption]{todonotes}
+%\presetkeys{todonotes}{disable}{} % USE THIS COMMAND TO DEACTIVE TODO NOTES
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{placeins}
+\usepackage{afterpage}
+\usepackage{pdflscape}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{xcolor}
+\usepackage{pgfplots}
+\usepackage{pgfplotstable}
+\usepackage{fancyvrb}
+\usepackage{tikz}
+\usepackage{enumitem}
+\usepackage{footnote}
+\usepackage[pdftex,dvipsnames]{xcolor}  % Colored text etc.
+\makesavenoteenv{tabular}
+\makesavenoteenv{table}
+\setlist[itemize]{noitemsep, topsep=0pt}
+\setlist[description]{noitemsep, topsep=0pt}
+\setlist[enumerate]{noitemsep, topsep=0pt}
+\usepackage{epstopdf}
+\usepackage{ifthen}
+\epstopdfsetup{update} % only regenerate pdf files when eps file is newer
+
+% Colorbox, used for notes, can be removed later as these are only really used for TODOs atm
+\usepackage{tcolorbox}
+
+\usepgfplotslibrary{colorbrewer}
+
+
+
+% show extra short titlepage
+\newif\ifShowExtraTitlePage
+% \ShowExtraTitlePagetrue % enable extra titlepage
+\ShowExtraTitlePagefalse % disable extra titlepage
+
+% show version on extra short titlepage
+\newif\ifShowVersionOnExtraTitlePage
+\ShowVersionOnExtraTitlePagetrue % enable version on extra titlepage
+%\ShowVersionOnExtraTitlePagefalse % disable version on extra titlepage
+
+% show Sperrvermerk -- ONLY required when cooperating with a company
+\newif\ifShowSperrvermerk
+% \ShowSperrvermerktrue % enable 
+\ShowSperrvermerkfalse % disable
+
+
+% **************************************************
+% Information and Commands for Reuse
+% **************************************************
+\newcommand{\mystar}{\ensuremath{\star}}
+\newcommand{\thesisTitle}{Valide Quellcode-Generierung aus Userstories mit LLM} 
+% TODO: Enhancing Quality of Multilingual Knowledge Graph Question Answering
+% TODO: Enhancing Quality of Multilingual Knowledge Graph Question Answering Systems
+\newcommand{\thesisName}{Tim Dietrich}
+\newcommand{\thesisSubject}{Master Projekt}
+%\newcommand{\thesisSubject}{Masterarbeit}
+\newcommand{\thesisDate}{202X-XX-XX}
+\newcommand{\thesisVersion}{Draft (0.1.0)}
+\newcommand{\gtriuparrowred}{\textcolor{red}{$\blacktriangle$}}
+\newcommand{\gtridownarrowred}{\textcolor{red}{$\blacktriangledown$}}
+\newcommand{\thesisFirstReviewer}{Prof. Dr. rer. nat. Andreas Both}
+\newcommand{\thesisFirstReviewerUniversity}{\protect{HTWK Leipzig}}
+\newcommand{\thesisFirstReviewerDepartment}{Fakultät Informatik und Medien}
+\newcommand{\numOfThesisPapers}{9\xspace} %%% DELETE
+\newcommand{\numOfAThesisPapers}{2\xspace}  %%% DELETE
+\newcommand{\thesisSecondReviewer}{... ...}
+\newcommand{\thesisSecondReviewerUniversity}{\protect{Leipzig University of Applied Sciences}}
+\newcommand{\thesisSecondReviewerDepartment}{Faculty of Computer Science and Media}
+\newcommand{\thesisThirdReviewer}{... ...}
+\newcommand{\thesisThirdReviewerUniversity}{\protect{... ...}}
+\newcommand{\thesisThirdReviewerDepartment}{... ...}
+
+\newcommand{\thesisFirstSupervisor}{Prof. Dr. rer. nat. Andreas Both}
+\newcommand{\thesisSecondSupervisor}{... ...}
+
+\newcommand{\thesisUniversity}{\protect{Hochschule für Technik, Wirtschaft und Kultur Leipzig}}
+\newcommand{\thesisUniversityDepartment}{Fakultät für Informatik und Medien}
+\newcommand{\thesisUniversityInstitute}{...}
+\newcommand{\thesisUniversityGroup}{...}
+\newcommand{\thesisUniversityCity}{Leipzig}
+\newcommand{\thesisUniversityStreetAddress}{...}
+\newcommand{\thesisUniversityPostalCode}{...}
+
+
+\newcommand{\CompanyName}{}
+\newcommand\Sperrvermerk[1]{
+	\ifthenelse{
+		#1 < 2
+	}{
+            \def\istgesperrt{False}
+	}{
+            \def\istgesperrt{True}
+            \def\sperrdauer{#1}
+	}
+}
+\def\istgesperrt{False}
+
+
+
+\definecolor{gray}{HTML}{B8B8B8}
+\definecolor{TEAL}{HTML}{298C8C}
+\definecolor{MAGENTA}{HTML}{800074}
+\definecolor{bblue}{HTML}{4F81BD}
+\definecolor{rred}{HTML}{C0504D}
+\definecolor{ggreen}{HTML}{9BBB59}
+\definecolor{ppurple}{HTML}{9F4C7C}
+\definecolor{oorange}{HTML}{9F7F4C}
+
+\definecolor{indoEuropean}{HTML}{8D9BB3}
+\definecolor{sinoTibetan}{HTML}{B38D8D}
+\definecolor{afroAsiatic}{HTML}{8DB392}
+\definecolor{turkic}{HTML}{CAD1DC}
+\definecolor{dravidian}{HTML}{DCCACA}
+\definecolor{japonic}{HTML}{CADCCD}
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\todoinline}[1]{\todo[inline]{#1}}
+
+\newcommand{\controlquestionsbase}[2]{\todo[inline,caption={#2},linecolor=Plum,backgroundcolor=yellow!50,bordercolor=Plum]{#1}}
+\newcommand{\controlquestions}[1]{\controlquestionsbase{#1}{Kontrollfragen}}
+\newcommand{\controlquestionscontinue}[1]{\controlquestionsbase{#1}{Kontrollfragen (Fortsetzung)}}
+\newcommand{\rarrow}{\ensuremath{\rightarrow}\xspace}
+\newcommand{\blind}[1]{\texttt{\lipsum[#1]}}
+\usepackage[misc,geometry]{ifsym}
+\usepackage{xspace}
+\usepackage{amsmath}
+\newcommand{\cmark}{\ding{51}}%
+\newcommand{\xmark}{\ding{55}}%
+\newcommand{\ie}{i.e.,\xspace}
+\newcommand{\myetal}{et al.\xspace}
+\newcommand{\st}{s.t.,\xspace} %% because of soul package
+\newcommand{\eg}{e.g.,\xspace}
+\newcommand{\wrt}{w.r.t.\xspace}
+\newcommand{\egPlain}{, e.g.\xspace}
+\newcommand{\Eg}{For example,\xspace}
+\newcommand{\cf}{cf.\xspace}
+\newcommand{\etc}{etc.\xspace}
+\newcommand{\qq}[1]{``#1''}
+\newcommand{\gqq}[1]{\glqq#1\grqq}
+\newcommand{\num}[1]{(#1)}
+\newcommand{\QAnswer}{QAnswer\xspace}
+\newcommand{\QALD}{QALD\xspace}
+\newcommand{\gtriuparrow}{\textcolor{green}{$\blacktriangle$}}
+\newcommand{\UTQA}{UTQA\xspace}
+\newcommand{\GERBIL}{GERBIL\xspace}
+\newcommand{\KGQAgent}{$\mathcal{KGQA}gent$\xspace}
+\newcommand{\mKGQAgent}{mKGQAgent\xspace}
+\newcommand{\SimpleAgent}{$\mathcal{SA}gent$\xspace}
+\newcommand{\mSimpleAgent}{mSAgent\xspace}
+\newcommand{\Tool}{\textsc{Tool}\xspace}
+\newcommand{\Plan}{\textsc{Plan}\xspace}
+\newcommand{\ICL}{\textsc{ICL}\xspace}
+\newcommand{\Env}{\textsc{Env}\xspace}
+\newcommand{\WebQuestions}{WebQuestions\xspace}
+\newcommand{\SimpleQuestions}{SimpleQuestions\xspace}
+\newcommand{\CogComp}{TREC\xspace}
+\newcommand{\TagMe}{TAGME}
+\newcommand{\DBpedia}{DBpedia\xspace}
+\newcommand{\Fscore}{F1 score\xspace}
+\newcommand{\Fscores}{F1 scores\xspace}
+\newcommand{\AnswerValidation}{\AV}
+\newcommand{\NameOfNewMetrics}{Answer Trustworthiness Score\xspace}
+\newcommand{\NameOfNewMetricsAtOne}{Answer Trustworthiness Score@1\xspace}
+\newcommand{\NameOfNewMetricsMath}{\ensuremath{ATS}}
+\newcommand{\NameOfNewMetricsMathAtOne}{\ensuremath{ATS@1}}
+\newcommand{\QVmath}{\ensuremath{\QV}}
+\newcommand{\QV}{\AV}
+\newcommand{\QVs}{\AVs}
+\newcommand{\QueryValidator}{\QV}
+\newcommand{\QueryValidators}{\QVs}
+\newcommand{\EAT}{EAT\xspace}
+\newcommand{\NER}{NER\xspace}
+\newcommand{\NEL}{NEL\xspace}
+\newcommand{\NED}{NED\xspace}
+\newcommand{\RE}{RE\xspace}
+\newcommand{\REL}{REL\xspace}
+\newcommand{\QB}{QB\xspace}
+\newcommand{\QE}{QE\xspace}
+\newcommand{\LLM}{LLM\xspace}
+\newcommand{\MT}{MT\xspace}
+\newcommand{\LM}{LM\xspace}
+\newcommand{\LMs}{LMs\xspace}
+\newcommand{\LLMs}{LLMs\xspace}
+\newcommand{\DNNs}{DNNs\xspace}
+\newcommand{\RNN}{RNN\xspace}
+\newcommand{\RNNs}{RNNs\xspace}
+\newcommand{\NNs}{NNs\xspace}
+\newcommand{\NN}{NN\xspace}
+\newcommand{\LSTM}{LSTM\xspace}
+\newcommand{\GRU}{GRU\xspace}
+\newcommand{\QA}{QA\xspace}
+\newcommand{\NLP}{NLP\xspace}
+\newcommand{\KB}{KB\xspace}
+\newcommand{\URI}{URI\xspace}
+\newcommand{\RESOURCE}{RESOURCE}
+\newcommand{\NUMERIC}{NUMERIC}
+\newcommand{\BERT}{BERT\xspace}
+\newcommand{\BOOLEAN}{BOOLEAN}
+\newcommand{\AV}{QV\xspace}
+\newcommand{\AVs}{QVs\xspace}
+\newcommand{\MRC}{MRC\xspace}
+\newcommand{\NEAMT}{NEAMT\xspace}
+\newcommand{\LFQA}{Lingua Franca\xspace}
+\newcommand{\DATETIME}{DATETIME}
+\newcommand{\LOCATION}{LOCATION}
+\newcommand{\GloVe}{GloVe\xspace}
+\newcommand{\Platypus}{Platypus\xspace} 
+\newcommand{\DeepPavlov}{DeepPavlov\xspace}
+\newcommand{\ELMo}{ELMo\xspace}
+\newcommand{\wordtovec}{word2vec\xspace}
+\newcommand{\MachineTranslation}{Machine Translation\xspace}
+\newcommand{\HelsinkiNLP}{OPUS MT\xspace}
+\newcommand{\BLEU}{BLEU\xspace}
+\newcommand{\NIST}{NIST\xspace}
+\newcommand{\ODQA}{OpenQA\xspace}
+\newcommand{\Precision}{Precision\xspace}
+\newcommand{\Recall}{Recall\xspace}
+\newcommand{\KBQA}{KBQA\xspace}
+\newcommand{\IRQA}{IRQA\xspace}
+\newcommand{\KGQA}{KGQA\xspace}
+\newcommand{\mKGQA}{mKGQA\xspace}
+\newcommand{\KG}{KG\xspace}
+\newcommand{\NL}{NL\xspace}
+\newcommand{\IR}{IR\xspace}
+\newcommand{\KGs}{KGs\xspace}
+\newcommand{\QALDplus}{QALD-9-plus\xspace}
+\newcommand{\RDF}{RDF\xspace}
+\newcommand{\WDaquaZero}{WDAqua-core0\xspace}
+\newcommand{\WDaquaOne}{WDAqua-core1\xspace}
+\newcommand{\RuBQ}{RuBQ\xspace}
+\newcommand{\FakeQA}{MemQA\xspace}
+\newcommand{\DistilBERT}{DistilBERT\xspace}
+\newcommand{\Mistral}{Mistral-7B\xspace}
+\newcommand{\MISTRAL}{\Mistral}
+\newcommand{\ZEPHYR}{ZEPHYR-7B\xspace}
+\newcommand{\FilteringMethod}{\ensuremath{F}}
+\newcommand{\isCorrect}{\ensuremath{isCorrect}}
+
+
+\newcommand{\ATS}{\NameOfNewMetrics}
+\newcommand{\ModelGroupOne}{$MG_1$\xspace}
+\newcommand{\ModelGroupTwo}{$MG_2$\xspace}
+\newcommand{\ModelGroupThree}{$MG_3$\xspace}
+\newcommand{\StageOne}{$S_1$\xspace}
+\newcommand{\StageTwo}{$S_2$\xspace}
+\newcommand{\real}{\textit{real}\xspace}
+\newcommand{\predicted}{\textit{predicted}\xspace}
+\newcommand{\afterfilter}{\textit{after filtering}\xspace}
+\newcommand{\beforefilter}{\textit{before filtering}\xspace}
+\newcommand{\Real}{\textit{Real}\xspace}
+\newcommand{\Predicted}{\textit{Predicted}\xspace}
+\newcommand{\Afterfilter}{\textit{After filtering}\xspace}
+\newcommand{\Beforefilter}{\textit{Before filtering}\xspace}
+
+\newcommand{\an}[1]{\textcolor{red}{AN: #1}}
+\newcommand{\numOfInitialPapers}{1875\xspace}
+\newcommand{\finalNumOfSystemPapers}{27\xspace}
+\newcommand{\finalNumOfDatasetPapers}{14\xspace~}
+\newcommand{\finalNumOfSurveyPapers}{7\xspace~} 
+\newcommand{\finalNumOfAcceptedPapers}{48\xspace}
+\newcommand{\finalNumOfUniqueSystems}{22\xspace} 
+\newcommand{\shareOfIndoEuropeanLangs}{88\%\xspace} 
+\newcommand{\percentageOfEnglishContentOnTheWeb}{49.2\%\xspace} 
+\newcommand{\percentageOfEnglishSpeakersOnTheWeb}{25.9\%\xspace} 
+\newcommand{\percentageOfEnglishContentOnTheWebDE}{49.2$\;$\%\xspace} 
+\newcommand{\percentageOfEnglishSpeakersOnTheWebDE}{25.9$\;$\%\xspace}
+
+ 
+% Abbrevations
+\newcommand{\RTE}{RTE\xspace}
+\newcommand{\SOA}{SOA\xspace}
+\newcommand{\QAKIS}{QAKiS\xspace}
+\newcommand{\Rho}{\mathrm{P}}
+\newcommand{\SPARQL}{SPARQL\xspace}
+\newcommand{\LCQuAD}{LC-QuAD\xspace}
+\newcommand{\LCQuADmath}{\ensuremath{\text{LC-QuAD}}}
+\newcommand{\RUBQ}{RuBQ 2.0\xspace}
+\newcommand{\RUBQmath}{\ensuremath{\text{RuBQ}}}
+\newcommand{\EndToEndQA}{End-to-end QA\xspace}
+\newcommand{\Freebase}{Freebase\xspace}
+\newcommand{\Wikidata}{Wikidata\xspace}
+\newcommand{\customTabular}[1]{\begin{tabular}[c]{@{}c@{}} #1\end{tabular}}
+\newcommand{\CyrillicText}[1]{{\fontencoding{T2A}\selectfont #1}}
+\newcommand{\dbo}[1]{\href{http://dbpedia.org/ontology/#1}{\texttt{dbo:#1}}}
+\newcommand{\dbr}[1]{\href{http://dbpedia.org/resource/#1}{\texttt{dbr:#1}}}
+\newcommand{\owl}[1]{\href{https://www.w3.org/2001/sw/wiki/#1}{\texttt{owl:#1}}}
+\newcommand{\RQ}[1]{$\mathcal{RQ}$\textit{\thechapter.#1}}
+\newcommand{\RG}[1]{$\mathcal{RG}$\textit{#1}}
+\newcommand{\contribution}[1]{(\textit{#1})}
+
+% MY CUSTOM COMMANDS
+\newcommand{\rqref}[1]{\hyperref[#1]{\color{ctcolorlistlabel}\tgherosfont\textbf{#1}}}
+\newcommand{\tabref}[1]{\hyperref[#1]{\color{ctcolorfloatlabel}\sffamily\textbf{Tabelle~\ref*{#1}}}}
+
+% labelfont={bf,sf,color=ctcolorfloatlabel}
+
+% **************************************************
+% Debug LaTeX Information
+% **************************************************
+%\listfiles
+
+
+% **************************************************
+% Load and Configure Packages
+% **************************************************
+%\usepackage[english]{babel} % babel system, adjust the language of the content
+\usepackage[latin,english,ngerman]{babel}
+\PassOptionsToPackage{% setup clean thesis style
+    figuresep=colon,%
+    hangfigurecaption=false,%
+    hangsection=true,%
+    hangsubsection=true,%
+    sansserif=false,%
+    configurelistings=true,%
+    colorize=full,%
+    colortheme=bluemagenta,%
+    configurebiblatex=true,%
+    bibsys=bibtex,%
+    bibfile=bib-refs,%
+    bibstyle=numeric,%
+    bibsorting=nty,%
+}{cleanthesis}
+\usepackage{cleanthesis}
+
+% Additional bibtex files are added here to cleanly sepparate them
+\addbibresource{bibtex/code_generation.bib}
+\addbibresource{bibtex/evaluation.bib}
+\addbibresource{bibtex/others.bib}
+\addbibresource{bibtex/prompts.bib}
+
+\hypersetup{% setup the hyperref-package options
+    pdftitle={\thesisTitle},    %   - title (PDF meta)
+    pdfsubject={\thesisSubject},%   - subject (PDF meta)
+    pdfauthor={\thesisName},    %   - author (PDF meta)
+    plainpages=false,           %   -
+    colorlinks=false,           %   - colorize links?
+    pdfborder={0 0 0},          %   -
+    breaklinks=true,            %   - allow line break inside links
+    bookmarksnumbered=true,     %
+    bookmarksopen=true          %
+}
+
+
+\usepackage{lipsum}
+\usepackage{kantlipsum}
+\usepackage{blindtext}
+
+% Test imports for sankey diagram
+% \usepackage{tikz}
+% \usepackage{sankey}
+
+\newcounter{lastenumcounter}

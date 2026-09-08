@@ -1,0 +1,162 @@
+% **************************************************
+% Document Class Definition
+% **************************************************
+\documentclass[%
+    paper=A4,               % paper size --> A4 is default in Germany
+    ngerman,
+    twoside=true,           % onesite or twoside printing
+    openright,              % doublepage cleaning ends up right side
+    parskip=half,           % spacing value / method for paragraphs
+    chapterprefix=true,     % prefix for chapter marks
+    11pt,                   % font size
+    headings=normal,        % size of headings
+    bibliography=totoc,     % include bib in toc
+    listof=totoc,           % include listof entries in toc
+    titlepage=on,           % own page for each title page
+    captions=tableabove,    % display table captions above the float env
+    chapterprefix=false,    % do not display a prefix for chapters
+    appendixprefix=false,    % but display a prefix for appendix chapter
+    draft=false,            % value for draft version
+]{scrreprt}%
+
+% **************************************************
+% Setup YOUR thesis document in this file !
+% **************************************************
+
+\usepackage[table]{xcolor}
+\usepackage{algorithm}
+%\usepackage{algorithmic}
+\usepackage{algpseudocode}
+\input{my-thesis-setup}
+
+
+% **************************************************
+% Document CONTENT
+% **************************************************
+\begin{document}
+
+\renewcommand{\an}[1]{\textbf{\textcolor{red}{AN: #1}}}
+% uncomment the following command to fill up pages with
+% whitespace instead of aligning the first and last lines
+% of a page (see \raggedbottom vs. \flushbottom)
+%\raggedbottom
+
+% --------------------------
+% rename document parts
+% --------------------------
+\renewcaptionname{ngerman}{\figurename}{Abb.}
+\renewcaptionname{ngerman}{\tablename}{Tab.}
+%\renewcaptionname{english}{\figurename}{Fig.}
+%\renewcaptionname{english}{\tablename}{Tab.}
+
+% --------------------------
+% Front matter
+% --------------------------
+\pagenumbering{roman}			% roman page numbering (invisible for empty page style)
+\pagestyle{empty}				% no header or footers
+\input{content/00_titlepages}		% INCLUDE: all titlepages
+% \cleardoublepage
+
+\pagestyle{plain}				% display just page numbers
+%
+\input{content/03_kurzfassung} % INCLUDE: kurzfassung
+% \cleardoublepage#
+\input{content/04_abstract}		% INCLUDE: the abstracts (english and german)
+% \cleardoublepage
+% \input{content/06_acknowledgement} % INCLUDE: acknowledgement
+% \cleardoublepage
+\input{content/08_scientific_authorship_declaration} % INCLUDE: Selbstständigkeitserklärung
+% \cleardoublepage
+%
+\currentpdfbookmark{\contentsname}{toc}
+\setcounter{tocdepth}{2}		% define depth of toc
+\renewcommand{\contentsname}{Inhaltsverzeichnis} % remove if English thesis
+\tableofcontents				% display table of contents
+% \cleardoublepage
+
+% --------------------------
+% Body matter
+% --------------------------
+\pagenumbering{arabic}			% arabic page numbering
+\setcounter{page}{1}			% set page counter
+\pagestyle{scrheadings}			% header and footer style
+
+% --------------------------
+% Content
+% --------------------------
+% INFO: Todo Liste
+\input{content/01_todos}
+% INFO: Temporary Note chapter
+% \input{content/01_notes}
+\cleardoublepage
+
+% TODO: Commented out because not yet required + to reduce compile times
+\input{content/10-Motivation-and-Problem-Statement}
+\input{content/20-Theoretical-Foundations-and-Terminology}
+\input{content/30-Related-Work}
+\input{content/40-Requirements-and-Concept}
+\input{content/50-Implementation}
+\input{content/60-Experiments}
+\input{content/70-Discussion}
+\input{content/80-Conclusions-and-Future-Work}
+
+
+% --------------------------
+% Back matter
+% --------------------------
+%
+{%
+\setstretch{1.1}
+\renewcommand{\bibfont}{\normalfont\small}
+\setlength{\biblabelsep}{0.25em}
+\setlength{\bibitemsep}{0.5\baselineskip plus 0.5\baselineskip}
+% print all references that are not ot type online
+\printbibliography[nottype=online]
+\newrefcontext[labelprefix={@}]
+% web pages are typically non-scientific resources, so we separate them from the scientific ones
+% typically 
+\printbibliography[heading=subbibliography,title={Webpages},type=online]
+
+\todo[inline,color=red]{Warnung: es fehlt in der Darstellung der Referenzen ein Wert wie "Access on: xx.xx.yyyy", was bei den websiten ungünstig ist (WSE Referenz kann nicht durch waybackmachine erhalten werden...)}
+
+\todo[inline]{Nochmal checken warum bei den waybackmachine links kein Zeilenumbruch stattfindet}
+
+\controlquestions{
+\begin{enumerate}
+    \item Sind alle Quellen an den relevanten Stellen im Text angegeben?
+    \item Ist das Literaturverzeichnis vollständig? 
+    \item Sind die Begriffe im Titel der Arbeit korrekt geschrieben (QALD, nicht qald; IBM, nicht ibm; DBpedia, nicht dbpedia; GitHub, nicht github; etc.)
+    \item Sind wissenschaftliche Quellen vollständig angegeben (alle Autoren, Konferenz/Journal, DOI, etc.)?
+    \item Sind alle Online-Quellen mit dem Datum des letzten Abrufs versehen und klar referenzierbar?
+    \item Sind die URLs für alle Online-Quellen unveränderlich (Beispiel: GitHub-URLs mit Hash, Wikipedia-Seiten mit Zeitstempel)? Sind alle anderen Webseiten über \url{https://web.archive.org/} persistiert und im BibTeX anstatt der Original-URL referenziert?  
+\end{enumerate}
+}
+}
+\cleardoublepage
+
+\listoffigures
+\cleardoublepage
+
+\listoftables
+\cleardoublepage
+
+%\lstlistoflistings
+%\cleardoublepage
+
+\appendix\cleardoublepage
+\input{content/90-appendix}       % INCLUDE: appendix
+
+%\cleardoublepage
+%\input{content/colophon}
+
+%\cleardoublepage
+%\input{content/declaration}
+%\clearpage
+
+%\newpage
+\mbox{}
+
+% **************************************************
+% End of Document CONTENT
+% **************************************************
+\end{document}
