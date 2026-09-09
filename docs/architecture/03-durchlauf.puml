@@ -1,30 +1,19 @@
 @startuml 03-durchlauf
-'=============================================================================
-' Abbildung 3 von 4 -- Durchlauf eines Versuchs (eine Aufgabe, ein Versuch)
-'
-' Die Integration der Codegenerierungsloesung ist an der Containergrenze
-' geteilt: der Adapter laeuft auf dem Host und kennt den Experimentaufbau,
-' der Treiber laeuft im Container und kennt das Arbeitsverzeichnis. Alles,
-' was zwischen beiden uebergeht, geht als Datei ueber.
-'
-' Die Referenztests liegen ausschliesslich im Bewertungscontainer und sind
-' im Ausfuehrungscontainer zu keinem Zeitpunkt vorhanden.
-'=============================================================================
 !include stil.puml
 
 component "Orchestrierung" as ORCHESTRIERUNG $INFRA
 
 package "Host" {
-  component "Loesungsadapter" as ADAPTER $PLATTFORM
+  component "Lösungsadapter" as ADAPTER $PLATTFORM
 }
 
 package "Aufgabenumgebung" {
 
-  package "Ausfuehrungscontainer" {
-    component "Loesungstreiber" as TREIBER $PLATTFORM
-    component "Codegenerierungs-\nloesung" as LOESUNG $STUDIE
+  package "Ausführungscontainer" {
+    component "Lösungstreiber" as TREIBER $PLATTFORM
+    component "Codegenerierungs-\nlösung" as LOESUNG $STUDIE
     component "Modellzugriff" as ZUGRIFF $PLATTFORM
-    folder "Generierte Loesung" as WORKSPACE
+    folder "Generierte Lösung" as WORKSPACE
   }
 
   package "Bewertungscontainer" {
@@ -33,13 +22,11 @@ package "Aufgabenumgebung" {
   }
 }
 
-cloud "Loesungs-Repository" as REPOSITORY
 cloud "Modellanbieter" as ANBIETER
 
 database "Laufaufzeichnung" as AUFZEICHNUNG $PLATTFORM
 
 ' ---- Ausrichtung ----------------------------------------------------------
-REPOSITORY -[hidden]d-> ANBIETER
 
 ' ---- Ablauf ---------------------------------------------------------------
 ORCHESTRIERUNG -d-> ADAPTER
@@ -48,8 +35,7 @@ ADAPTER        -d-> TREIBER : Dateien
 TREIBER  -d-> LOESUNG
 TREIBER  .d.> ZUGRIFF
 LOESUNG  -d-> ZUGRIFF
-LOESUNG  .r.> REPOSITORY
-ZUGRIFF  -r-> ANBIETER
+ZUGRIFF  -l-> ANBIETER
 
 LOESUNG   -d-> WORKSPACE
 WORKSPACE -d-> VERFAHREN
@@ -59,13 +45,5 @@ ORCHESTRIERUNG ..> VERFAHREN
 
 VERFAHREN -d-> AUFZEICHNUNG
 ADAPTER   ..> AUFZEICHNUNG
-
-'================================================================== Legende ==
-legend bottom
-  |<#E7EFF9> Evaluierungsplattform |
-  |<#EDEFF1> Orchestrierungsplattform |
-  |<#FAEBD0> Austauschbare Studienbestandteile |
-  |<#FFFFFF> Externe Dienste und Quellen |
-endlegend
 
 @enduml

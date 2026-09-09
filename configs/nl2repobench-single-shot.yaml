@@ -15,7 +15,6 @@ run:
 benchmark:
   dataset: nl2repobench/nl2repobench
   ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
-  #  Since we're doing a full run, specific task from template is commented out
   task_names:
     - nl2repobench/math-verify
   image_mirror:
@@ -27,31 +26,6 @@ model:
   name: ${MODEL:-moonshotai/kimi-k2.5}
   base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
   api_key_env: API_KEY
-  # Which of the aggregator's servers may answer. A model name does not name a
-  # server: OpenRouter offers this model from more than twenty providers that
-  # serve different quantizations of the same weights — fp4, fp8, bf16 — at
-  # very different speeds, and its default route is chosen by price. Unpinned,
-  # two arms of this comparison can run the same model at different numerical
-  # precision, and so can two requests inside one arm, with nothing recording
-  # which. That is a confound in the one variable every configuration here
-  # holds constant, so it is pinned beside the model rather than left to the
-  # aggregator, and it belongs in `model` rather than in any solution's
-  # hyperparameters because it is not a property of a method. The test that
-  # requires these blocks to agree across configurations is therefore the test
-  # that keeps every arm on one server.
-  #
-  # Measured on 2026-08-26, one 500-token generation each: the default route
-  # landed on open-inference/fp4 at 11 tok/s, which is ~51 minutes for a
-  # 32k-token reply. baidu/fp8 gave ~190 tok/s at $0.28 per million output
-  # tokens, the best speed for the money among the endpoints this account may
-  # use. siliconflow/fp8 is the named second choice because it is the only
-  # high-uptime endpoint that is *also* declared fp8, so a fallback keeps the
-  # precision this pin exists to fix; `allow_fallbacks: false` stops the
-  # aggregator substituting anything outside the pair.
-  #
-  # These tags name endpoints *of the model above*. Changing the model means
-  # choosing them again — `GET /api/v1/models/<model>/endpoints` lists what is
-  # on offer, with each endpoint's quantization and price.
   routing:
     order:
       - baidu/fp8
@@ -62,38 +36,8 @@ agent:
   import_path: evaluation_platform.single_shot_agent:SingleShotAgent
   n_concurrent: 10
   hyperparameters:
-    # Sampling — `temperature`, `top_p` and `max_tokens` — is not stated here.
-    # It is set for every arm at once in `configs/generation.yaml`, so that a
-    # difference between this run and the arms beside it is a difference in
-    # method. Stating one of the three here is rejected before Docker starts.
-
-    # This arm is why the shared output ceiling is set where it is: the whole
-    # repository has to fit in one reply, where the other solutions spend their
-    # budget a file or a function at a time. A reply that reaches the ceiling is
-    # recorded as `truncated` in the run's `resolved-setup.json`, and counted
-    # there as `output_limit_exhausted`, so a baseline that ran out of room and
-    # one that did not know the answer stay distinguishable. Check those fields
-    # before reading a poor result as a poor baseline.
-
-    # One request means one chance, and a throttled provider would otherwise
-    # cost the whole task. These attempts re-send the same prompt; they are not
-    # a second look at the answer, and how many were needed is recorded.
     request_attempts: 3
-    # How long one attempt waits. A request for tens of thousands of tokens
-    # takes minutes to answer and writes nothing until it arrives, so a stall
-    # is hard to tell from ordinary slowness; left unbounded it would take the
-    # task's whole hour and record nothing about why. Three attempts of ten
-    # minutes fit inside NL2RepoBench's agent timeout with room to spare.
     request_timeout_seconds: 600
-    # Reasoning is pinned rather than inherited, as in the CodeTeam and CodeS
-    # configurations beside this one, and to the same value — an arm that
-    # reasons where another does not is not a comparison of methods. Left
-    # unset, how much the model reasons is the provider's default for it at
-    # that moment: set outside the experiment, absent from its record, and free
-    # to change between runs. `request_extra` is merged into the request body
-    # verbatim, so it carries OpenRouter's `reasoning` object as well as other
-    # providers' shapes. What actually happened is recorded as
-    # `reasoning_tokens` in the run's model usage.
     request_extra:
       reasoning:
         enabled: false

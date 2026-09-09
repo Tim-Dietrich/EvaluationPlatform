@@ -1,21 +1,11 @@
 @startuml 04-auswertung
-'=============================================================================
-' Abbildung 4 von 4 -- Aufzeichnung und Auswertung
-'
-' Was ein Lauf hinterlaesst, und was daraus wird. Der deklarierte Aufbau wird
-' vor dem Lauf archiviert, der ausgefuehrte Aufbau waehrend des Laufs
-' geschrieben; die Gegenueberstellung beider macht ein Ergebnis
-' nachvollziehbar. Die Auswertung liest die Aufzeichnungen aller Arme in eine
-' gemeinsame Form, sodass ein Vergleich die Verfahren vergleicht und nicht
-' ihre Protokolle.
-'=============================================================================
 !include stil.puml
 
 package "Laufaufzeichnung" as AUFZEICHNUNG {
   component "Deklarierter Aufbau" as DEKLARIERT $PLATTFORM
-  component "Benchmark-Aufloesung" as BENCHMARKREF $PLATTFORM
-  component "Ausgefuehrter Aufbau" as AUSGEFUEHRT $PLATTFORM
-  folder "Generierte Loesung" as WORKSPACE
+  component "Benchmark-Auflösung" as BENCHMARKREF $PLATTFORM
+  component "Ausgeführter Aufbau" as AUSGEFUEHRT $PLATTFORM
+  folder "Generierte Lösung" as WORKSPACE
   component "Ablaufprotokolle" as PROTOKOLLE $PLATTFORM
   component "Nutzungsdaten" as NUTZUNG $PLATTFORM
   component "Bewertung" as BEWERTUNG $PLATTFORM
@@ -29,7 +19,6 @@ package "Auswertung" {
 
 folder "Abbildungen und Tabellen" as ERGEBNIS
 
-' ---- Ausrichtung: zwei Reihen statt einer langen ---------------------------
 DEKLARIERT   -[hidden]r-> BENCHMARKREF
 BENCHMARKREF -[hidden]r-> AUSGEFUEHRT
 AUSGEFUEHRT  -[hidden]r-> WORKSPACE
@@ -44,8 +33,8 @@ URSACHEN     -d-> AGGREGATION
 AGGREGATION  -d-> ERGEBNIS
 
 '================================================================== Legende ==
-legend bottom
-  |<#E7EFF9> Evaluierungsplattform |
-endlegend
+'legend bottom
+'  |<#E7EFF9> Evaluierungsplattform |
+'endlegend
 
 @enduml

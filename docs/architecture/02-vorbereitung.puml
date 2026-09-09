@@ -1,13 +1,4 @@
 @startuml 02-vorbereitung
-'=============================================================================
-' Abbildung 2 von 4 -- Vorbereitung eines Experiments
-'
-' Alles, was vor dem ersten Container geschieht. Die Konfiguration wird
-' geprueft und aufgeloest, der Benchmark auf eine Version festgelegt und
-' bereitgestellt, daraus ein Auftrag fuer die Orchestrierung erzeugt. Der
-' aufgeloeste Aufbau wird archiviert, bevor der Lauf beginnt; ein
-' unterbrochener Lauf wird aus diesem Archiv fortgesetzt.
-'=============================================================================
 !include stil.puml
 
 package "Experimentdefinition" {
@@ -19,7 +10,7 @@ package "Experimentdefinition" {
 database "Laufaufzeichnung" as AUFZEICHNUNG $PLATTFORM
 
 package "Vorbereitung" {
-  component "Pruefung und\nAufloesung" as PRUEFUNG $PLATTFORM
+  component "Prüfung und\nAuflösung" as PRUEFUNG $PLATTFORM
   component "Benchmark-\nBereitstellung" as BEREITSTELLUNG $PLATTFORM
   component "Job-Erzeugung" as JOB $PLATTFORM
 }
@@ -54,10 +45,10 @@ JOB            -l-> AUFZEICHNUNG
 AUFZEICHNUNG   .r.> PRUEFUNG : Wiederaufnahme
 
 '================================================================== Legende ==
-legend bottom
-  |<#E7EFF9> Evaluierungsplattform |
-  |<#EDEFF1> Orchestrierungsplattform |
-  |<#FFFFFF> Externe Dienste und Quellen |
-endlegend
+'legend bottom
+'  |<#E7EFF9> Evaluierungsplattform |
+'  |<#EDEFF1> Orchestrierungsplattform |
+'  |<#FFFFFF> Externe Dienste und Quellen |
+'endlegend
 
 @enduml
