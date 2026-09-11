@@ -478,6 +478,9 @@ _CODES_BUDGET = re.compile(
 # of a line so the interpreter's own `SyntaxWarning: invalid escape sequence`
 # chatter, of which there are thousands, is not counted as a failure.
 _CODES_UNPARSEABLE = re.compile(r"^(?:invalid syntax|unterminated|expected )", re.M)
+# How the harness reports a run it ended itself.
+_CODES_EXIT = re.compile(r"Command failed \(exit (\d+)\)")
+_CODES_DEADLINE = re.compile(r"timed out after ([\d.]+) seconds")
 
 
 def _read_codes(trial: Path, result: dict) -> dict:
@@ -491,6 +494,12 @@ def _read_codes(trial: Path, result: dict) -> dict:
     files = _CODES_FILE.findall(log)
     stop = _CODES_BUDGET.search(log)
     completed = "Done. Repo at:" in log
+    # How a run that never wrote a budget line of its own was ended, read from
+    # the harness's exception rather than guessed: the shell's exit status, and
+    # the deadline the harness says it waited for.
+    failure = (result.get("exception_info") or {}).get("exception_message") or ""
+    code = _CODES_EXIT.search(failure)
+    deadline = _CODES_DEADLINE.search(failure)
     return {
         "completed": completed,
         "requests": log.count("HTTP Request: POST"),
@@ -502,18 +511,37 @@ def _read_codes(trial: Path, result: dict) -> dict:
         "stopped_at": int(stop.group(1)) if stop else float("nan"),
         "stop_limit": stop.group(2) if stop else ("" if completed else "killed"),
         "unparseable": len(_CODES_UNPARSEABLE.findall(log)),
+        "agent_exit": int(code.group(1)) if code else None,
+        "harness_deadline": float(deadline.group(1)) if deadline else float("nan"),
+        # The pipeline's second configured limit, alongside the token budget.
+        "wall_clock_limit": result["config"]["agent"]["kwargs"].get(
+            "max_wall_clock_seconds"),
     }
 
 
 def _finalize_codes(frame: pd.DataFrame) -> pd.DataFrame:
-    # The pipeline either reaches its own "Done" or it is stopped, by one of its
-    # two configured budgets or by the harness around it.
+    # The pipeline either reaches its own "Done" or it is stopped. Three things
+    # can stop it, and they are three different findings: its own token budget,
+    # its own wall clock, or the harness around it losing patience. Exit 1 here
+    # is the ordinary way a budget-stopped run terminates — the runner raises
+    # BudgetExhausted and the shell reports a failure — so the exit status alone
+    # does not separate them, and the log's own budget line is what does.
     frame["hit_budget"] = ~frame.completed
     frame["ending"] = "finished the whole pipeline"
     for limit, label in (("max_token_budget", "stopped at the token budget"),
-                         ("max_wall_clock_seconds", "stopped at the wall clock"),
-                         ("killed", "killed before it finished")):
+                         ("max_wall_clock_seconds", "stopped at its own wall clock")):
         frame.loc[frame.stop_limit == limit, "ending"] = label
+
+    # A run with no budget line of its own was ended from outside, and the two
+    # ways that happens are worth telling apart. The harness cancels the agent at
+    # its own deadline; a signal kills the process mid-request, which the shell
+    # reports as exit 137 (128 + SIGKILL) and which the log never explains.
+    killed = frame.stop_limit == "killed"
+    frame.loc[killed, "ending"] = "ended from outside"
+    frame.loc[killed & (frame.exception == "AgentTimeoutError"), "ending"] = (
+        "stopped at the harness deadline")
+    frame.loc[killed & (frame.agent_exit == 137), "ending"] = "killed by a signal"
+
     # Some runs print the pipeline's own "Done" having produced nothing: the repo
     # sketch came back with no file tree, so there was never anything to fill.
     # That is not a finished pipeline and must not be counted as one.
@@ -557,7 +585,8 @@ ARMS = (
         read_trial=_read_codes,
         finalize=_finalize_codes,
         extra_columns=("completed", "requests", "planned_files", "files_reached",
-                       "function_prompts", "stopped_at", "stop_limit", "unparseable"),
+                       "function_prompts", "stopped_at", "stop_limit", "unparseable",
+                       "agent_exit", "harness_deadline", "wall_clock_limit"),
     ),
 )
 
@@ -824,13 +853,18 @@ def compare(frame: pd.DataFrame) -> pd.DataFrame:
             "solved": solved,
             "zeros": int((scored.reward == 0).sum()),
             "in_tok": part.in_tok.sum(),
+            # Input arrives as one figure with the cached part named separately,
+            # so the part actually sent to the model is the difference.
+            "uncached_tok": part.in_tok.sum() - part.cache_tok.sum(),
+            "cache_tok": part.cache_tok.sum(),
             "out_tok": out,
             "total_tok": total,
             "cache_share": part.cache_tok.sum() / part.in_tok.sum(),
             "total_per_solved": per(total),
             "out_per_solved": per(out),
             "usage_reported": int(part.total_tok.notna().sum()),
-            "median_minutes": part.t_total.median() / 60,
+            "median_minutes": part.t_agent.median() / 60,
+            "total_hours": part.t_agent.sum() / 3600,
         }
     return pd.DataFrame.from_dict(rows, orient="index")
 
@@ -891,6 +925,74 @@ def solved_alone(frame: pd.DataFrame) -> pd.DataFrame:
         "only this arm": {a: int((solved[a] & ~others[a]).sum()) for a in solved},
         "also solved elsewhere": {a: int((solved[a] & others[a]).sum()) for a in solved},
     }).loc[list(solved.columns)]
+
+
+#: The three-way collapse of `OUTCOMES`, worst first. The four failure stages
+#: are one class here: a cross-table of consumption asks what the budget bought,
+#: not how the failure happened, and `cause_by_arm` already answers the latter.
+RESULT_CLASSES = ("zero", "partial credit", "solved")
+
+
+def result_class(frame: pd.DataFrame) -> pd.Series:
+    """Each scored trial as zero, partial credit or solved; NA if never scored.
+
+    A trial the verifier never reached has no result to classify and is not a
+    zero — see `scored`. Keeping it as NA rather than folding it into the worst
+    class is what stops a host fault from being read as a failure of the method.
+    """
+    klass = pd.Series(pd.NA, index=frame.index, dtype="object")
+    klass[frame.scored & (frame.reward == 0)] = "zero"
+    klass[frame.scored & (frame.reward > 0)] = "partial credit"
+    klass[frame.scored & frame.solved] = "solved"
+    return klass
+
+
+def tokens_by_class(frame: pd.DataFrame, *, column: str = "total_tok") -> pd.DataFrame:
+    """Trials and tokens per arm and result class, with each arm's token share.
+
+    Columns are a two-level index of `(class, statistic)` over `RESULT_CLASSES`,
+    carrying `trials`, `tokens`, `median` and `share`, plus a trailing
+    `("total", ...)` block for the row. `share` is of the arm's own consumption,
+    which is the comparable quantity — the arms differ 56x in absolute tokens.
+
+    Unscored trials are excluded from the body and reported in `frame.attrs`,
+    so a table built on this can say what it left out instead of losing it.
+    """
+    work = frame.assign(result_class=result_class(frame))
+    body = work[work.result_class.notna()]
+    arms = arm_order(frame)
+
+    def cut(aggfunc):
+        return (body.pivot_table(index="arm", columns="result_class", values=column,
+                                 aggfunc=aggfunc, observed=True)
+                .reindex(index=arms, columns=list(RESULT_CLASSES)))
+
+    trials = (body.pivot_table(index="arm", columns="result_class", values="reward",
+                               aggfunc="size", observed=True)
+              .reindex(index=arms, columns=list(RESULT_CLASSES)).fillna(0).astype(int))
+    tokens, median = cut("sum"), cut("median")
+    total = tokens.sum(axis=1)
+
+    columns, data = [], {}
+    for klass in RESULT_CLASSES:
+        for name, source in (("trials", trials), ("tokens", tokens),
+                             ("median", median)):
+            columns.append((klass, name))
+            data[(klass, name)] = source[klass]
+        columns.append((klass, "share"))
+        data[(klass, "share")] = tokens[klass] / total
+    for name, values in (("trials", trials.sum(axis=1)), ("tokens", total)):
+        columns.append(("total", name))
+        data[("total", name)] = values
+
+    table = pd.DataFrame(data, columns=pd.MultiIndex.from_tuples(columns))
+    unscored = work[work.result_class.isna()]
+    table.attrs["unscored"] = (unscored.groupby("arm", observed=True).size()
+                               .reindex(arms).fillna(0).astype(int))
+    table.attrs["unscored_tokens"] = (unscored.groupby("arm", observed=True)[column].sum()
+                                      .reindex(arms).fillna(0))
+    table.attrs["column"] = column
+    return table
 
 
 def outcome_mix(frame: pd.DataFrame) -> pd.DataFrame:

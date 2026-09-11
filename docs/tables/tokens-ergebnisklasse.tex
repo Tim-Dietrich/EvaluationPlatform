@@ -1,0 +1,28 @@
+\begin{table}[H]
+  \centering
+  \begin{threeparttable}
+    \caption[Tokenverbrauch nach Ergebnisklasse]{Tokenverbrauch der vier Ansätze nach Ergebnisklasse. Je Klasse die Zahl der Läufe, die insgesamt verbrauchten Tokens und deren Anteil am Verbrauch des jeweiligen Ansatzes. Anteile beziehen sich zeilenweise auf 100\,\%.}
+    \label{tab:tokens-ergebnisklasse}
+    \footnotesize
+    \begin{tabularx}{\textwidth}{@{}Xrrrrrrrrr@{}}
+      \toprule
+       & \multicolumn{3}{c}{Null} & \multicolumn{3}{c}{Teilerfolg} & \multicolumn{3}{c}{Gelöst} \\ \cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+      Ansatz & n & Tokens & Anteil & n & Tokens & Anteil & n & Tokens & Anteil \\
+      \midrule
+      SingleShot & 61 & 4,8\,M & 65,2\,\% & 40 & 2,3\,M & 31,7\,\% & 3 & 225,8\,k & 3,1\,\% \\
+      Terminus-2 & 28 & 88,4\,M & 28,8\,\% & 64 & 208,2\,M & 67,7\,\% & 8 & 10,7\,M & 3,5\,\% \\
+      SelfCollab & 25 & 54,8\,M & 29,7\,\% & 36 & 67,5\,M & 36,7\,\% & 43 & 61,9\,M & 33,6\,\% \\
+      CodeS & 78 & 320,9\,M & 78,5\,\% & 24 & 82,8\,M & 20,3\,\% & 2 & 5,0\,M & 1,2\,\% \\
+      \midrule
+      \textbf{alle Ansätze} & 192 & 468,9\,M & 51,7\,\% & 164 & 360,8\,M & 39,8\,\% & 56 & 77,9\,M & 8,6\,\% \\
+      \bottomrule
+    \end{tabularx}
+    \begin{tablenotes}[flushleft]
+      \footnotesize
+      \item[] Null = Reward genau 0; Teilerfolg = 0 $<$ Reward $<$ 0,90; Gelöst = Reward $\geq$ 0,90. Tokens sind Ein- und Ausgabe zusammen.
+      \item[] Die Anteile der Ansatzzeilen beziehen sich auf den Verbrauch des jeweiligen Ansatzes, die der Summenzeile auf den Verbrauch aller vier zusammen; letztere wird vom verbrauchsstärksten Ansatz dominiert.
+      \item[] Ohne Wertung und daher nicht enthalten: Terminus-2 4 Läufe mit 315,4\,k. Diese Läufe haben kein Urteil des Verifiers und sind keine Nullwertung; die Zeilensummen liegen deshalb um diesen Betrag unter den Gesamtwerten in Tabelle~\ref{tab:kennzahlen-arme}.
+      \item[] In 3 von 4 Ansätzen verbraucht ein Lauf ohne Ergebnis im Median mehr Tokens als ein gelöster (Terminus-2, SelfCollab, CodeS); ein Fehlschlag ist also nicht der billigere Ausgang.
+    \end{tablenotes}
+  \end{threeparttable}
+\end{table}

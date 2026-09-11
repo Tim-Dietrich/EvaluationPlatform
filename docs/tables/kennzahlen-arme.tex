@@ -1,0 +1,26 @@
+\begin{table}[H]
+  \centering
+  \begin{threeparttable}
+    \caption[Kennzahlen der vier Codegenerierungs-Ansätze]{Ergebnisse der vier Codegenerierungs-Ansätze auf NL2RepoBench. Je Ansatz ein Durchlauf über alle 104 Aufgaben mit demselben Modell, absteigend nach mittlerem Reward.}
+    \label{tab:kennzahlen-arme}
+    \footnotesize
+    \begin{tabularx}{\textwidth}{@{}lXrrrrrr@{}}
+      \toprule
+      Ansatz & Budget & \multicolumn{2}{c}{Reward} & Gelöst & Null & \multicolumn{2}{c}{Output Tokens} \\ \cmidrule(lr){3-4}\cmidrule(lr){7-8}
+       &  & $\varnothing$ & Md &  &  & gesamt & je Lösung \\
+      \midrule
+      SelfCollab & 3 Runden & 0,53 & 0,63 & 43 & 25 & 7,3\,M & 170,2\,k \\
+      Terminus-2\tnote{a} & 58 Turns & 0,32 & 0,28 & 8 & 28 & 4,0\,M & 499,1\,k \\
+      SingleShot & 131\,100 Ausgabe-Tokens & 0,16 & 0,00 & 3 & 61 & 5,2\,M & 1,7\,M \\
+      CodeS\tnote{b} & 4\,000\,000 Tokens & 0,07 & 0,00 & 2 & 78 & 19,6\,M & 9,8\,M \\
+      \bottomrule
+    \end{tabularx}
+    \begin{tablenotes}[flushleft]
+      \footnotesize
+      \item[a] Terminus-2: 4 Läufe ohne Wertung (Host-Fehler, kein Urteil des Verifiers); Reward-Kennzahlen über 100 Läufe.
+      \item[b] CodeS: 8 Läufe ohne erfasste Nutzung; Token-Summen über 96 Läufe und damit eine Untergrenze.
+      \item[] Gelöst = Reward $\geq$ 0,90; Null = Reward genau 0. Der Reward ist der Anteil der bestandenen verdeckten Tests einer Aufgabe.
+      \item[] Die Aufgabe \texttt{more-Itertools} ist nicht wertbar: ihre verdeckten Tests importieren die im Image installierte Bibliothek statt des erzeugten Codes. Ohne sie sinkt die Zahl gelöster Aufgaben bei SelfCollab von 43 auf 42 und CodeS von 2 auf 1. Die Rangfolge ändert sich nicht.
+    \end{tablenotes}
+  \end{threeparttable}
+\end{table}
