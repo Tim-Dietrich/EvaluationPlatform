@@ -1,32 +1,19 @@
 # Scientific Codegen Evaluation MVP
 
-This repository runs code generation solutions against whole benchmarks using
-Harbor as the orchestrator, and keeps the setup of every run on record so
-results from different solutions can be compared fairly.
-
-A benchmark enters the repository as a dependency, not as checked-in task
-files. Harbor's registry carries NL2RepoBench as a digest-pinned dataset of 104
-tasks; an experiment configuration names the dataset, the version, and which of
-its tasks to run, and Harbor downloads and pins the rest. Scaling from one task
-to the full benchmark is a filter in the configuration, not an integration
-effort.
-
-Most Harbor benchmarks need nothing beyond that. NL2RepoBench is the exception:
-every one of its tasks names its tester image on a private mirror that needs GCP
-credentials this project does not have, while the same images are public on
-`ghcr.io/multimodal-art-projection/nl2repobench`. A configuration can therefore
-declare an optional `image_mirror`, and before a run the launcher resolves
-exactly the tasks the job will execute, reads the images they name, and makes
-each one available locally under the name the task expects, pulled from its
-public home; Docker Compose then uses the local image without contacting a
-registry. One rule covers all 104 NL2RepoBench tasks, and the benchmark's own
-files are never modified.
+This repository runs code generation solutions against whole benchmarks with
+Harbor as the orchestrator, and records the setup of every run so results from
+different solutions can be compared. This file is the operating manual: how to
+set the platform up, configure an experiment, run it, and find what it wrote.
+The reasoning behind the design and the results themselves are in the
+accompanying paper.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - Docker with Linux containers enabled
-- An OpenRouter API key (or credentials for another OpenAI-compatible endpoint)
+- An OpenRouter API key, or credentials for another OpenAI-compatible endpoint
+
+## Setup
 
 Create the project environment and install the pinned Harbor release:
 
@@ -35,186 +22,132 @@ py -3.13 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[test]"
 ```
 
-Each code generation solution under evaluation is checked out beneath
-`code_generation/` as a submodule, for reading and reference:
-
-```powershell
-git submodule update --init
-```
-
-A run does not use these working copies: the agent clones the revision named in
-the experiment configuration into the task container, so a clone without them
-still runs.
-
-NL2RepoBench's published source is pinned the same way at
-`benchmarks/nl2repobench/upstream`, at the commit the subset selection reads
-its task metadata from. Nothing runs from it either: the tasks come from
-Harbor's registry, and `benchmarks/nl2repobench/` keeps the metadata cache
-and the selected subset beside it.
-
-## Experiment configurations
-
-`configs/` is the home for run setup. One file describes one experiment: the
-benchmark and task selection, the model backend, the code generation solution
-and the revision of it, and the hyperparameters its roles receive. Nothing that
-changes what a run does lives outside it — `.env` holds credentials only.
-
-Which hyperparameters a file may state depends on the solution it names.
-`agent.import_path` selects it, and each solution declares its own set: a name
-belonging to a different one, or to none, is rejected with the known names
-listed rather than accepted and then ignored by an agent that has no use for
-it.
-
-Three settings are the exception and belong to no solution — see [Sampling
-parameters](#sampling-parameters) below.
-
-## Sampling parameters
-
-`configs/generation.yaml` sets `temperature`, `top_p` and `max_tokens`, once,
-for every arm:
-
-```yaml
-temperature: 0.0
-top_p: 0.95
-max_tokens: 32768
-```
-
-They are not hyperparameters of any solution. They describe the model call
-rather than the method wrapped around it, in the way `model.routing` describes
-the endpoint rather than the method, and an arm that samples differently from
-another is not a comparison of scaffolds — a difference that no reward figure
-shows. So no solution declares them, no solution defaults them, no runner
-hardcodes them, and a configuration that states one under
-`agent.hyperparameters` is rejected before Docker starts with a pointer back to
-this file.
-
-The values reach each arm the way its interface allows. The four solutions that
-run in the task container receive all three beside their own hyperparameters and
-put them in the request body. Terminus takes a `temperature` of its own and has
-no parameter for the other two, so `top_p` and `max_tokens` travel as
-`llm_kwargs`, which Harbor's LiteLLM wrapper spreads into the body of every
-request it sends. Each run records which route each value took.
-
-Every run writes the values it actually used into its `resolved-setup.json`,
-read back from the objects the requests were built from rather than from this
-file, so a recorded result can be checked against its own sampling rather than
-against whatever the file says today. A job's archived
-`experiment-config.yaml` pins them the way it pins the benchmark digest, so
-`--resume` continues a job at the sampling its first half ran at.
-
-One file per *comparison*, rather than one file outright. A configuration may
-name a different sampling file:
-
-```yaml
-sampling:
-  file: configs/generation-humaneval.yaml
-```
-
-and one does. `humaneval-self-collaboration.yaml` reproduces a published
-experiment, so the values it samples at are stated in that paper rather than
-chosen here — temperature 0 and a 512-token ceiling — and forcing them through
-the file the NL2RepoBench arms read would make one comparison out of two. What
-the invariant protects is unchanged and still enforced: the three values come
-from a file and never from a configuration, an arm or a runner; every arm of
-one comparison reads one file; and which file a run read is recorded with it.
-
-The output ceiling is a cap rather than a target. It is set by Single-Shot,
-which has to fit an entire repository into one reply where the others spend
-their budget a file or a function at a time; the arms that answer in small
-pieces never approach it.
-
-Copy the tracked template and set `API_KEY` to your credential. The local
-`.env` file is ignored by Git:
+Copy the tracked template and set `API_KEY`. `.env` is ignored by Git and holds
+credentials and backend defaults only; nothing that changes what a run does
+lives there:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Run the default configuration:
-
-```powershell
-.venv\Scripts\python.exe main.py
-```
-
-Run a different one, or name the job directory yourself:
-
-```powershell
-.venv\Scripts\python.exe main.py --config configs/math-verify-self-collaboration.yaml
-```
-
-The launcher loads `.env` before starting Harbor so every setting, including
-`PYTHONUTF8`, is in place. Values in a configuration may use `${VAR}` and
-`${VAR:-default}`, which resolve against the environment; the shipped
-configuration uses this for the model backend, so `MODEL`, `MODEL_PROVIDER`,
-and `BASE_URL` in `.env` still override it without editing tracked files. A
-configuration is validated before Docker starts: unknown keys, unknown
-hyperparameters, an unset credential, and DeepSeek's `/api/v1` path are all
-rejected with an explanation rather than a failed run. DeepSeek's official
-OpenAI-compatible endpoint has no `/api/v1` path:
-
 ```dotenv
-MODEL_PROVIDER=deepseek
-MODEL=deepseek-v4-flash
-BASE_URL=https://api.deepseek.com
+API_KEY=
+MODEL_PROVIDER=openrouter
+MODEL=moonshotai/kimi-k2.5
+BASE_URL=https://openrouter.ai/api/v1
+PYTHONUTF8=1
 ```
 
 `MODEL_PROVIDER` is Harbor's reporting label and is not sent to the API.
-DeepSeek also accepts `https://api.deepseek.com/v1`. Free OpenRouter models can
-be temporarily rate-limited even with a valid key. The adapter waits and retries
-after the tool has exhausted its own attempts; if every one is throttled, the
-job log reports the rate limit and the affected model explicitly.
+`PYTHONUTF8=1` is required on Windows so task instructions are read as UTF-8.
+For DeepSeek, set `MODEL_PROVIDER=deepseek`, `MODEL=deepseek-v4-flash` and
+`BASE_URL=https://api.deepseek.com`; a `/api/v1` path is rejected at
+validation because that endpoint does not have one.
 
-## Which server answers
+The submodules are checked out for reading and reference only. A run clones
+the revision named in the experiment configuration into the task container, so
+a clone without them still runs:
 
-A model name does not name a server. OpenRouter offers one model from more
-than twenty providers, and they are not interchangeable: they serve different
-quantizations of the same weights — fp4, fp8, bf16 — at very different speeds
-and prices, and the default route is chosen by price. Left alone, two arms of a
-comparison can run the same model at different numerical precision, and so can
-two requests inside one arm, with nothing recording which.
-
-That is a confound in the one variable every configuration here holds constant,
-so `model.routing` pins it:
-
-```yaml
-model:
-  name: ${MODEL:-...}
-  routing:
-    order:
-      - baidu/fp8
-      - siliconflow/fp8
-    allow_fallbacks: false
+```powershell
+git submodule update --init
 ```
 
-It sits in `model` rather than in any solution's hyperparameters because it is
-not a property of a method, and the test that requires the model blocks to
-agree across configurations is therefore the test that keeps every arm on one
-server. An unknown routing key is rejected before Docker starts: the API
-accepts one and ignores it, which would leave a run routed by price while its
-record said otherwise.
+- `code_generation/` holds the three integrated solutions.
+- `benchmarks/nl2repobench/upstream` holds NL2RepoBench's published source at
+  the commit the subset selection reads its task metadata from. Tasks come
+  from Harbor's registry, not from this checkout.
 
-The directive reaches every arm the same way, as `MODEL_ROUTING`, and enters
-the request as its `provider` field by whichever of two routes fits the
-solution. Where this platform builds the request body it is merged in; where
-the tool builds its own, `model_routing.py` wraps the OpenAI client so every
-request carries it. The second exists so that no published tool has to be
-modified to take part: what changes is the server a request is sent to, not its
-messages, its sampling, or the model that answers it. Terminus, which reaches
-the provider through LiteLLM rather than the OpenAI client, is given the same
-directive through Harbor's own `extra_body`.
+## Running an experiment
 
-Pinning states an intent, so each run also records which server actually
-answered, as `providers_served` in its `resolved-setup.json`. A run whose
-directive named one endpoint and whose responses came from another is a run
-that did not measure what its setup says.
+```powershell
+.venv\Scripts\python.exe main.py
+.venv\Scripts\python.exe main.py --config configs/nl2repobench-self-collaboration.yaml
+.venv\Scripts\python.exe main.py --config configs/nl2repobench-codes.yaml --job-name codes-full
+```
 
-Endpoint tags name endpoints *of the configured model*, so changing the model
-means choosing them again. `GET /api/v1/models/<model>/endpoints` lists what is
-on offer with each endpoint's quantization, price and uptime.
+`--config` defaults to `configs/math-verify-self-collaboration.yaml`;
+`--job-name` defaults to the launch timestamp. The launcher loads `.env`,
+validates the configuration, resolves and pins the benchmark, makes the tester
+images available, and then starts Harbor. Unknown keys, unknown
+hyperparameters, an unset credential and an invalid endpoint path are rejected
+before Docker starts.
 
-## Benchmarks
+`scripts/run-smoke-tests.ps1` runs the `math-verify-*` configurations once
+each, as separate jobs under a shared `smoke__<timestamp>` prefix, as an
+end-to-end check of the harness against the real model backend. `-DryRun`
+prints the commands instead of running them; `-StopOnFailure` stops at the
+first failing arm.
 
-The `benchmark` block of a configuration is what makes a run comparable:
+### Concurrency
+
+```yaml
+run:
+  n_concurrent_trials: 4
+  retry:
+    max_retries: 2
+    wait_multiplier: 2
+    min_wait_sec: 5
+    max_wait_sec: 120
+```
+
+Two limits apply, and they are not the same:
+
+- `run.n_concurrent_trials` is the machine's. Each trial runs an agent
+  container and a tester sidecar, and Harbor passes the memory a task declares
+  (2 CPUs and 8 GB per NL2RepoBench trial) to Docker as a ceiling: a trial
+  that reaches it is killed and scored as an error. Before a run starts the
+  launcher compares what the selected tasks ask for with what Docker reports.
+  On Windows and macOS that figure is the Docker VM's allocation, not the
+  host's.
+- `agent.n_concurrent` is the provider's. It caps how many trials call the
+  model at once while container setup, installation and verification stay
+  fully parallel. It cannot exceed `n_concurrent_trials`; a configuration
+  that makes it larger is rejected.
+
+Tasks spend most of their time waiting on the model, so concurrency above the
+core count still pays; memory is the limit that bites first. A NL2RepoBench
+task takes around six minutes, so 104 in sequence is about ten hours and four
+at a time roughly two and a half.
+
+`run.retry` re-runs trials that failed on a provider hiccup or a dropped
+connection. Harbor's own exclusions still apply, so a timeout, an exhausted
+usage limit or a rejected credential fails once.
+
+Tester images are pulled concurrently and cached. Each NL2RepoBench image is
+around two gigabytes and every task has its own, so the first run of the whole
+benchmark is a large one-time download.
+
+### Continuing an interrupted run
+
+```powershell
+.venv\Scripts\python.exe main.py --resume jobs\2026-08-21__16-48-46
+```
+
+The setup comes from the `experiment-config.yaml` archived beside the job;
+`--resume` cannot be combined with `--config` or `--job-name`. Tester images
+the remaining tasks need are made available again first. Trials that
+finished, including failed ones, are kept; cancelled trials are discarded and
+run again. A job is resumable once Harbor has written its `config.json`; a
+run that failed before that point has to be launched again.
+
+## Experiment configurations
+
+One file under `configs/` describes one experiment: the benchmark and task
+selection, the model backend, the code generation solution and its revision,
+and the hyperparameters it receives. Files are named
+`<benchmark>-<solution>.yaml`; the `math-verify-*` files are the single-task
+versions of each arm, for iterating cheaply, and
+`nl2repobench-subset-single-shot.yaml` is the 30-task subset described under
+[Benchmarks](#benchmarks).
+
+Values may use `${VAR}` and `${VAR:-default}`, resolved against the
+environment; the shipped configurations use this for the model backend, so
+`MODEL`, `MODEL_PROVIDER` and `BASE_URL` in `.env` override it without editing
+tracked files. Comparing two solutions means two files that differ only in
+their `agent` section; `tests/test_experiment_config.py` asserts that the
+`benchmark` and `model` blocks agree across the arms of a comparison.
+
+### `benchmark`
 
 ```yaml
 benchmark:
@@ -227,99 +160,159 @@ benchmark:
       pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
 ```
 
-`image_mirror` is optional and benchmark-specific: it exists because
-NL2RepoBench publishes references to images it cannot itself pull. A benchmark
-whose images are reachable needs no rule, and omitting the key leaves the
-preparation step to resolving and pinning tasks.
+- `dataset` and `ref` name a Harbor registry dataset and pin its version. A
+  floating reference is resolved once at launch and re-pinned, so every trial
+  of a run sees one version.
+- Omit `task_names` to run the entire benchmark, or narrow it with glob
+  patterns (org-qualified), `exclude_task_names` and `n_tasks`. Harbor's own
+  dataset filtering does the selecting.
+- `image_mirror` is optional. Before a run, the launcher reads the tester
+  images named by the selected tasks and makes each one available locally
+  under the name the task expects, pulled from the mirror; Docker Compose then
+  uses the local image. NL2RepoBench needs it because its tasks name images on
+  a private registry that are public on `ghcr.io`.
+- `path` instead of `dataset` names a generated benchmark directory (HumanEval
+  and SketchEval below). The launcher computes a digest over the tree and
+  archives it in `jobs/<job>/benchmark.json`; a `ref` beside a `path` is
+  refused. The task filters work the same way.
+- `task: {path: ...}` in place of `benchmark` runs a single hand-written task
+  directory. Exactly one of `benchmark` and `task` is required.
 
-`ref` pins the benchmark version; a floating reference is resolved once at
-launch and re-pinned, so every trial of a run sees one version. Omit
-`task_names` to run the entire benchmark, or narrow it with glob patterns
-(org-qualified), `exclude_task_names`, and `n_tasks` — Harbor's own dataset
-filtering does the selecting, so the run and its preparation can never disagree
-about scope. `configs/nl2repobench-self-collaboration.yaml` runs all 104 tasks;
-`configs/math-verify-self-collaboration.yaml` is the same setup narrowed to one
-task for iterating cheaply.
+### `model`
 
-### A representative subset
+```yaml
+model:
+  provider: ${MODEL_PROVIDER:-openrouter}
+  name: ${MODEL:-moonshotai/kimi-k2.5}
+  base_url: ${BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: API_KEY
+  routing:
+    order:
+      - baidu/fp8
+      - siliconflow/fp8
+    allow_fallbacks: false
+```
 
-Between one task and all of them sits the case where the whole benchmark is what
-you want to measure but not what you can afford to run: 104 tasks times five
-repeats times five solutions is 2 600 trials. `configs/nl2repobench-subset-single-shot.yaml`
-is the Single-Shot configuration narrowed to 30 tasks chosen to stand in for all
-104 — a stratified sample of the benchmark's own difficulty levels, holding its
-26 / 46 / 32 mix at 8 / 13 / 9.
+`api_key_env` names the environment variable holding the credential; its
+value is never written to a job. `routing` pins which OpenRouter endpoints may
+answer, since one model is served by many providers at different
+quantizations and prices. It reaches every arm as `MODEL_ROUTING` and enters
+each request as its `provider` field: merged into the body where this platform
+builds the request, injected through a wrapped OpenAI client where the tool
+builds its own, and through Harbor's `extra_body` for Terminus. An unknown
+routing key is rejected. Each run records which endpoints actually answered as
+`providers_served` in its `resolved-setup.json`. Endpoint tags belong to the
+configured model; `GET /api/v1/models/<model>/endpoints` lists them with
+quantization, price and uptime.
 
-Which 30, and why those, is the entire question, so the selection is not
-hand-written: `notebooks/nl2repobench-subset-selection.ipynb` derives it from
-published task metadata, shows the distributions it preserves, and writes both
-the config and `benchmarks/nl2repobench/subset.csv`. Everything in the generated
-config except its name, description and `task_names` is byte-identical to
-`configs/nl2repobench-single-shot.yaml`, which is what lets a subset run be
-compared with the full run it stands in for. Re-run the notebook rather than
-editing the task list by hand; `pip install -e ".[analysis]"` installs what it
-needs.
+### `sampling`
 
-Comparing a further code generation solution means copying a configuration,
-changing only the `agent` section, and leaving everything else byte-identical.
-`configs/math-verify-codeteam.yaml` and `configs/math-verify-codes.yaml` are
-that: the same task, the same pinned benchmark version, and the same model as
-the Self-Collaboration configuration beside them, given to CodeTeam and to
-CodeS instead. `configs/math-verify-single-shot.yaml` and
-`configs/math-verify-terminus.yaml` are the two baselines on the same footing.
-A test asserts that those blocks agree across all five, since that agreement is
-the entire basis for comparing their results.
+`temperature`, `top_p` and `max_tokens` are set once per comparison in a
+sampling file, `configs/generation.yaml` by default:
 
-Integrating a solution that is not yet here is a larger job than copying a
-configuration, and `docs/adding-a-solution.md` describes it: what the platform
-requires of a tool, the five files an integration adds, and the mistakes the
-earlier integrations made.
+```yaml
+temperature: 0.0
+top_p: 0.95
+max_tokens: 32768
+```
 
-A configuration may instead point at a single local task directory with
-`task: {path: ...}`, for a task authored by hand rather than taken from a
-benchmark. Exactly one of `benchmark` and `task` is required.
+A configuration may name a different file with `sampling: {file: ...}`;
+`humaneval-self-collaboration.yaml` reads `configs/generation-humaneval.yaml`.
+The three values are not hyperparameters of any solution, and stating one
+under `agent.hyperparameters` is rejected. The four solutions that run in the
+task container put them in the request body; Terminus takes `temperature`
+directly and receives the other two as `llm_kwargs`. Every run writes the
+values it actually used, and the route each took, into its
+`resolved-setup.json`, and the archived `experiment-config.yaml` pins them for
+`--resume`.
 
-### A benchmark Harbor does not publish
+### `agent`
 
-`benchmark.dataset` needs the benchmark to be in Harbor's registry, and one we
-need is not. HumanEval is in neither the git registry nor the package registry
-— between them they offer `humanevalfix`, which is 164 *repair* tasks, and
-`evoeval`, which is 100 mutated problems — so for that one benchmark the tasks
-are generated here instead:
+```yaml
+agent:
+  import_path: evaluation_platform.self_collaboration_agent:SelfCollaborationAgent
+  n_concurrent: 10
+  repository: https://github.com/YihongDong/Self-collaboration-Code-Generation.git
+  commit: a6490a9d0d32f3238cc5b776d2de8d2134d2b138
+  hyperparameters:
+    max_rounds: 3
+```
+
+`import_path` selects the adapter in `src/evaluation_platform/`, which
+installs the tool at `commit` in the task container, hands it the
+specification and the hyperparameters, and records what it spent. Each adapter
+declares the hyperparameters it accepts — `AGENT_HYPERPARAMETERS` in
+`src/evaluation_platform/experiment_config.py` is the schema of record — and a
+name belonging to another solution, or to none, is rejected with the known
+names listed. The ones that decide the shape of a run:
+
+- **Self-Collaboration** (`self_collaboration_agent`): `max_rounds`,
+  `analyst_steps`, `coder_steps`, `test_command`. The Tester runs
+  `test_command` in the agent's workspace between Coder rounds, so it needs
+  both a command and `max_rounds` greater than one. `task_shape: humaneval`
+  selects the authors' HumanEval entry point instead, which takes `max_rounds`
+  and `max_steps` and refuses `test_command`.
+- **CodeTeam** (`code_team_agent`): `architects`, `max_qa_rounds`,
+  `rag_enabled` and `rag_backend`, `dynamic_developer_allocation` and
+  `fixed_developer_agents`, `git_coordination`. The tool has no bound of its
+  own on the cost of a task, so `max_wall_clock_seconds` and
+  `max_token_budget` are the bound; reaching either is recorded as a failed
+  agent run and the workspace is graded as it stands.
+- **CodeS** (`codes_agent`): `max_wall_clock_seconds` and `max_token_budget`
+  as for CodeTeam, and `concurrent_requests`, how many of one phase's
+  requests are in flight at once. The default `1` is the published sequential
+  pipeline, which does not finish within a NL2RepoBench task's agent timeout.
+  It multiplies with `agent.n_concurrent`. The integrated driver is the tool's
+  OpenAI-compatible one, so the experiment's model runs the CodeS sketch
+  pipeline; the fine-tuned model of the CodeS paper is not used.
+- **Single-Shot** (`single_shot_agent`): one request, the reply parsed into
+  files by a deterministic writer. It is not a published tool: `repository`
+  and `commit` are rejected, and the run records digests of its prompt and
+  runner instead. `truncated`, `common_top_level_directory` and
+  `parse_warnings` in `resolved-setup.json` say whether the reply was cut off
+  or misparsed.
+- **Terminus 2** (`terminus_agent`): Harbor's own reference agent, run on the
+  host against a tmux session in the container and reaching the provider
+  through LiteLLM. `max_turns` is its budget; the Harbor release is its pin.
+
+`docs/adding-a-solution.md` describes what the platform requires of a tool and
+the files an integration adds; `docs/baselines.md` describes what the two
+baselines are for and how `max_turns` was chosen.
+
+## Benchmarks
+
+**NL2RepoBench** is a Harbor registry dataset of 104 tasks.
+`configs/nl2repobench-*.yaml` run all of them; `configs/math-verify-*.yaml` run
+the single task `math-verify`. `configs/nl2repobench-subset-single-shot.yaml`
+runs a stratified subset of 30 (8 / 13 / 9 across the benchmark's three
+difficulty levels). The subset is generated, not hand-written:
+`notebooks/nl2repobench-subset-selection.ipynb` derives it from the task
+metadata cached in `benchmarks/nl2repobench/task_metadata.csv`, writes
+`benchmarks/nl2repobench/subset.csv` and the configuration, and keeps the
+generated file byte-identical to `configs/nl2repobench-single-shot.yaml`
+outside its name, description and `task_names`. Re-run the notebook rather
+than editing the task list.
+
+**HumanEval** is not in Harbor's registry (`humanevalfix` and `evoeval` are
+different benchmarks), so its 164 tasks are generated from the pinned inputs
+in `benchmarks/humaneval/data/` and named by directory:
 
 ```bash
 python scripts/build_humaneval_tasks.py
 ```
-
-and named by directory rather than by dataset:
 
 ```yaml
 benchmark:
   path: benchmarks/humaneval/tasks
 ```
 
-`benchmarks/humaneval/README.md` is the longer form: what the 164 packages are
-generated from and how those inputs are pinned, how grading reproduces the
-HumanEval authors' own pipeline down to its quirks, and why the HumanEval-ET
-ceiling is 96.3% rather than 100%. What a registry `ref` pins for every other
-benchmark, a digest over the generated tree pins here; the launcher computes it
-and archives it in `jobs/<job>/benchmark.json`, and stating a `ref` beside a
-`path` is refused. Everything else — `task_names`, `exclude_task_names`,
-`n_tasks` — goes through Harbor's own dataset filtering exactly as it does for
-a registry dataset.
+`benchmarks/humaneval/README.md` documents the inputs, their pins and the
+grading pipeline. `configs/humaneval-self-collaboration.yaml` runs the
+authors' own entry point against it.
 
-Generating a benchmark rather than depending on one is the exception and should
-stay one. It is worth the exception here because the alternative was
-publishing somebody else's benchmark to a shared registry under our own
-account.
-
-### A benchmark that is nowhere but inside a tool
-
-SketchEval is the second, and it is generated for a stronger reason: it is not
-published as a dataset anywhere at all. It exists as a directory inside the
-CodeS repository — nineteen Python projects under `validation/cleaned_repos/` —
-which this project already pins as a submodule, because CodeS is one of the
-solutions under test. So the tasks are generated from that commit:
+**SketchEval** is published nowhere as a dataset; it exists as nineteen Python
+projects under `validation/cleaned_repos/` in the CodeS repository, which is
+pinned as a submodule. Its tasks are generated from that commit:
 
 ```bash
 python scripts/build_sketcheval_tasks.py
@@ -330,374 +323,99 @@ benchmark:
   path: benchmarks/sketcheval/tasks
 ```
 
-Three things about it are unlike every other benchmark here, and all three
-belong in front of any result it produces.
+Its reward is SketchBLEU, the CodeS authors' similarity score between the
+generated and the reference repository. Nothing is executed and there are no
+hidden tests, so it is not comparable to a NL2RepoBench reward, and the
+attainable ceiling is below 1.0 and differs per repository.
+`benchmarks/sketcheval/README.md` documents the ceilings and the metric's
+pins. `configs/sketcheval-codes.yaml` runs CodeS against it.
 
-**The reward is a similarity score, not a passing fraction.** SketchBLEU — the
-CodeS authors' `calc_repobleu` — scores a generated repository against a
-reference repository: a quarter each of n-gram match, keyword-weighted n-gram
-match, AST subtree match and dataflow match. Nothing is executed and there are
-no hidden tests. A SketchEval reward and an NL2RepoBench reward are different
-quantities, and a figure that puts them on one axis is measuring nothing.
+Generated task trees (`benchmarks/*/tasks/`) are ignored by Git; regenerate
+them rather than committing them.
 
-**The attainable ceiling is below 1.0 and differs per repository.** Scoring a
-reference against itself returns 1.0 for three components and less for
-dataflow, because tree-sitter extracts no dataflow from some functions and the
-assignment leaves those unmatched. Eight of the nineteen reach 1.0; flameshow's
-ceiling is 0.9796. Read a reward against its repository's ceiling.
-
-**It is CodeS's own benchmark.** SketchEval was introduced by the CodeS paper
-and ships in the CodeS repository, so an arm evaluated on it is on ground its
-authors chose. Worth saying whenever the result sits beside one from
-NL2RepoBench, which belongs to nobody in this comparison.
-
-`benchmarks/sketcheval/README.md` is the longer form: the per-repository
-ceilings, how the metric is pinned and why two of its build pins are
-load-bearing, what a workspace the metric cannot score is scored as, and why
-the instruction is the repository's README with nothing appended to it.
-`configs/sketcheval-codes.yaml` runs CodeS against it, with the `model` and
-`agent` blocks byte-identical to `math-verify-codes.yaml`.
-
-## Running a whole benchmark
-
-A NL2RepoBench task takes around six minutes, so 104 of them in sequence is
-about ten hours. Harbor runs trials concurrently, and `run.n_concurrent_trials`
-is how many at once:
-
-```yaml
-run:
-  n_concurrent_trials: 4
-  retry:
-    max_retries: 2
-    wait_multiplier: 2
-    min_wait_sec: 5
-    max_wait_sec: 120
-```
-
-Four concurrent trials turns ten hours into roughly two and a half. There are
-two limits to weigh, and they are not the same limit:
-
-- **`run.n_concurrent_trials`** is the machine's. Every task declares what it
-  needs — NL2RepoBench asks for 2 CPUs and 8 GB per trial — and each trial runs
-  both its agent container and its tester sidecar. Harbor passes the declared
-  memory to Docker as a ceiling, so a trial that reaches it is killed and the
-  task is scored as an error rather than merely slowed down. Before a run
-  starts, the launcher reads what the selected tasks ask for, compares it with
-  what Docker reports it has, and says so. On Windows and macOS that figure is
-  the Docker VM's allocation, not the host's hardware, and raising it is often
-  the cheapest way to run more tasks at once.
-- **`agent.n_concurrent`** is the provider's. It caps how many of those trials
-  may be calling the model at the same time, while container setup,
-  installation, and verification stay fully parallel. Set it equal to
-  `n_concurrent_trials` for no extra limit, and lower it to stay under a rate
-  limit. It can never be the larger of the two; a configuration that makes it
-  so is rejected before Docker starts.
-
-Because tasks spend most of their time waiting on the model rather than on this
-machine's processors, concurrency well above the core count still pays. Memory
-is the ceiling that bites first.
-
-`run.retry` is the other half of making a long run finish. Across a hundred
-tasks a provider hiccup or a dropped connection is close to certain, and
-without a retry the affected task is simply missing from the results. Harbor's
-own exclusions still apply, so failures a retry cannot fix — a timeout, an
-exhausted usage limit, a rejected credential — fail once rather than three
-times.
-
-Tester images are prepared concurrently too. Each NL2RepoBench image is around
-two gigabytes and every task has its own, so the whole benchmark is a large
-one-time download; pulling them one at a time would cost more than the run
-itself. They are cached, so only the first run pays.
-
-### Continuing an interrupted run
-
-Harbor keeps every trial that already has a result, so a run that dies at task
-80 of 104 costs the remaining tasks rather than all of them:
-
-```powershell
-.venv\Scripts\python.exe main.py --resume jobs\2026-08-21__16-48-46
-```
-
-The setup comes from the `experiment-config.yaml` archived beside the job, so a
-resume continues the run that was configured rather than offering a chance to
-change it — `--resume` cannot be combined with `--config` or `--job-name`. Any
-tester images the remaining tasks need are made available again first, since a
-resume may happen days later on a machine whose images have since been pruned.
-Trials that were cancelled are discarded and run again; trials that finished,
-including failed ones, are kept.
-
-A job is resumable once Harbor has written its `config.json`. A run that failed
-before that point — a configuration error, an unreachable image — has to be
-launched again.
-
-## The code generation solutions
-
-Three are integrated, and two baselines are evaluated beside them. Each
-receives the task's natural-language specification and an empty workspace, and
-each is driven by an adapter in `src/evaluation_platform/` that installs the
-tool in the task container, hands it the specification and the configured
-hyperparameters, and records what it spent. No adapter changes how a method
-works.
-
-### Self-Collaboration
-
-A team of three: the Analyst localizes the work, the Coder writes it, and the
-Tester runs the tests and reports failures back to the Coder for the next
-round. The Tester runs *between* Coder rounds, so it needs both halves of its
-setup to exist:
-
-- `test_command` — what it runs in the agent's workspace. Without it the
-  session degrades to Analyst followed by a single Coder pass.
-- `max_rounds` greater than one — with a single round the loop ends before the
-  Tester is ever reached, whatever the test command says.
-
-The Tester only ever runs the code and tests the agent wrote itself. A task's
-reference tests stay in its tester sidecar and are never visible to the agent.
-
-The tool ships **two entry points**, and `task_shape` selects which one runs.
-They are not two settings of one code path: they define their roles
-differently, give them different tools, and mean different things by a Tester.
-
-- `repository` (the default) is `core.agent.SelfCollabSession`, described
-  above. Its Analyst explores an existing repository and names the files to
-  change, its Coder edits them with `edit_file` and is shown its own `git diff`
-  between rounds, and its Tester runs the `test_command`. This is the shape
-  NL2RepoBench is answered in, and it is what every configuration that predates
-  `task_shape` gets.
-- `humaneval` is `run_humaneval.py`, which is what the authors' own `bash
-  run.sh` invokes and therefore the code path behind the paper's HumanEval
-  figures. Its Analyst makes one plain call with no tools, its Coder writes
-  `solution.py` with `write_file` under a `max_steps` budget, and its Tester is
-  a model that writes its own `check(candidate)` cases and runs them. It takes
-  `max_rounds` and `max_steps`; `analyst_steps` and `coder_steps` belong to the
-  other shape, and `test_command` is refused outright rather than archived and
-  ignored, because a Tester that writes its own tests has no command to run.
-
-The runner imports and calls the authors' `run_task` rather than reimplementing
-it, so the prompts, the loop and the order of the roles are theirs. What the
-harness does around it — one problem instead of a HuggingFace dataset, the
-returned code written to where the benchmark grades, and the model call wrapped
-for accounting — is listed in every run's `resolved-setup.json` under
-`harness_compensations`.
-
-### CodeTeam
-
-A team of four kinds. `architects` Architects each propose a software design
-sketch — the file tree, the public interfaces, the dependencies between files,
-and how many Developers the plan needs — a CTO selects one and normalizes it,
-the Developers implement the files they own under a dependency-aware scheduler,
-and a QA agent tests the result and hands failures back for repair for up to
-`max_qa_rounds` rounds.
-
-Three keys are the ablations the paper reports, each isolating one component:
-
-- `rag_enabled` — whether the Architects are grounded with design references
-  retrieved from a corpus of public repositories. Off by default here, because
-  the paper's vector backend downloads an embedding model at first use inside
-  the task container; `rag_backend: lexical` grounds from the same corpus
-  without that dependency, and the retrieval stack is installed only for a run
-  that asks for it.
-- `dynamic_developer_allocation` — whether the selected design decides the
-  number of Developers and who owns which file, or the files are dealt
-  round-robin to `fixed_developer_agents` of them.
-- `git_coordination` — whether Developers propagate interface changes to each
-  other as commits carrying a structured update reason.
-
-QA writes its own throwaway tests, runs them in the workspace, and deletes
-them before the repository is returned; as with Self-Collaboration's Tester,
-the benchmark's reference tests stay in the sidecar and are never visible.
-
-Unlike Self-Collaboration, CodeTeam has no bound of its own on what a task may
-cost: the width of the architect search, the number of files the chosen design
-names, and the QA rounds each cost what they cost. `max_wall_clock_seconds`
-and `max_token_budget` are the bound. Reaching either stops the run and is
-recorded as a failed agent run, and Harbor still grades whatever the workspace
-holds at that point.
-
-### CodeS
-
-A pipeline rather than a team, and the only one of the three that is not a
-conversation between agents. It writes the repository in three layers of
-sketch: RepoSketcher proposes the file tree from the specification,
-FileSketcher writes each Python file the tree names as signatures with empty
-bodies, and SketchFiller implements one function per request from that file's
-sketch and the sketches of the files it imports. A final stage parses each
-sketch, substitutes the bodies into it, and writes the result to the workspace.
-
-Two things about the tool decide how it is configured here.
-
-The first is that CodeS is published as a *fine-tuned model* together with the
-framework that prompts it, and its own inference driver runs that model locally
-through `transformers`, on a GPU, reaching no API at all. The tool also ships a
-driver that runs the same three phases against an OpenAI-compatible endpoint,
-and that is the one integrated: this platform supplies one credential and one
-base URL, and a comparison across solutions depends on all of them reaching the
-same provider the same way. What is measured here is therefore CodeS's
-multi-layer sketch driven by the experiment's model, not the fine-tuned model
-of the paper — a distinction worth keeping in view when reading a result.
-
-The second is that the length of a run is chosen by the model rather than by
-the configuration. There are no rounds and no roles to size: the cost of a task
-is one request, plus one for each Python file the first response named, plus
-one for every function those files declared. A specification that invites a
-wide design costs several times what a narrow one does, and nothing in the tool
-notices. Two settings follow from that:
-
-- `max_wall_clock_seconds` and `max_token_budget` are the bound, as for
-  CodeTeam, and they matter more here because there is no number of rounds to
-  lower instead. Unlike CodeTeam, which builds the repository as it goes, CodeS
-  assembles at the very end — so a run that stops early still writes what it
-  has, and a repository of correct interfaces with some bodies left as `pass`
-  is graded rather than discarded.
-- `concurrent_requests` is how many of one phase's requests are in flight at
-  once. The published pipeline is strictly sequential, which is the default of
-  `1`, and seventy-odd requests in sequence exceeds the task's agent timeout
-  before the pipeline can finish. Raising it is safe because of what the phases
-  are: every file sketch reads the one repository sketch, and every function
-  body reads the completed set of file sketches, so no request in a phase can
-  see another request in the same phase whatever the order. Note that it
-  multiplies with `agent.n_concurrent` rather than being capped by it — the
-  requests reaching the provider are the product of the two.
-
-### Single-Shot and Terminus 2, the two baselines
-
-Each of the three solutions claims to improve on prompting a model directly,
-and without a direct-prompting arm a comparison between them cannot say whether
-the scaffolding or the model is doing the work. Two arms answer that, and they
-answer different halves of it. `docs/baselines.md` is the argument in full,
-including what to check before reading a low baseline score as a weak baseline.
-
-**Single-Shot** is one request: the specification goes in, a repository comes
-back as text, and a deterministic writer puts the files on disk. It is the only
-entry here that is not a published tool, and it has no revision to pin —
-stating `repository` or `commit` for it is rejected. What identifies a run is
-the prompt and the runner, both recorded as digests.
-
-Its prompt is fixed in `run_single_shot.py` rather than exposed as a
-hyperparameter: a control whose wording is a knob gets tuned, and a tuned
-control is a fourth solution. Everything it says beyond the task's own
-specification is the mechanical contract for naming files, which exists only
-because the benchmark grades files on disk while a model emits text.
-
-A single reward figure cannot tell a baseline that did not know the answer from
-one that ran out of room to write it down, so each run records `truncated`,
-`common_top_level_directory` and `parse_warnings` in its `resolved-setup.json`,
-and keeps the reply verbatim beside the prompt that produced it.
-
-**Terminus 2** is Harbor's own reference agent: one model, one shell, one loop,
-with no roles, no plan and no review. It isolates the thing Single-Shot cannot,
-which is whether a solution's *structure* beats the same model iterating on its
-own. It is the one entry not installed into the task container — the agent runs
-on the host and drives a tmux session inside it — and the one that reaches the
-provider through LiteLLM rather than through the OpenAI client the others
-share, so its tokens are counted by Harbor's accounting. Every run says so in
-its own record.
-
-Terminus ships inside Harbor, so there is no upstream revision to pin here
-either; the Harbor release is the pin. Its `max_turns` is chosen for budget
-parity rather than picked round, and `docs/baselines.md` says how.
-
-## Results and provenance
+## Results
 
 Harbor writes each job beneath `jobs/`. Alongside Harbor's own records, each
 run keeps the setup that produced it:
 
-- `jobs/<job>/experiment-config.yaml`: the resolved experiment configuration,
-  written before the run starts, with templates expanded and defaults filled
-  in. It names the credential's environment variable, never its value.
+- `jobs/<job>/experiment-config.yaml`: the resolved configuration, written
+  before the run starts, with templates expanded and defaults filled in. It
+  names the credential's environment variable, never its value.
 - `jobs/<job>/benchmark.json`: the benchmark version the run resolved to, the
   tasks it selected, and the content digest of every tester image used.
 - `jobs/<job>/config.json`: Harbor's record, including the hyperparameters it
   passed to the agent.
 - `<trial>/agent/resolved-setup.json`: what actually ran in the container —
-  the commit of the code generation tool, the resolved model, the
-  hyperparameters, the `generation` block holding the sampling the run used and
-  the route each value took, the `failures` block described below, and whether
-  the phases that a configuration can switch off were in fact on. The two
-  baselines have no upstream commit, so they record what identifies them
-  instead: Single-Shot the digests of its prompt and its runner, Terminus the
-  Harbor release it ran from.
+  the commit of the tool, the resolved model, the hyperparameters, the
+  `generation` block with the sampling used and the route each value took,
+  `providers_served`, the `failures` block below, and which switchable phases
+  were on. Single-Shot records the digests of its prompt and runner, Terminus
+  the Harbor release.
+- `<trial>/agent/`: the solution's console log and its own record of the run:
+  `session-history.json` for Self-Collaboration; `codeteam/` (every
+  architect's design, the CTO's choice, the plan, each QA round) for CodeTeam;
+  `codes/` (prompt and answer of every request, one file per phase) for CodeS;
+  `single-shot/` (the prompt and the verbatim reply) for Single-Shot. Terminus
+  keeps its trajectory and terminal recording as it does under Harbor
+  anywhere. These stay out of the workspace so they are not graded.
 - `<trial>/artifacts/workspace/`: the generated workspace.
-- `<trial>/agent/`: the solution's console log, plus what it recorded about its
-  own reasoning. Self-Collaboration writes `session-history.json`, the
-  structured session including each round's test result; CodeTeam writes
-  `codeteam/`, holding every architect's candidate design, the CTO's choice and
-  its rationale, the normalized plan, and the result of each QA round; CodeS
-  writes `codes/`, holding the prompt and answer of every request it made, one
-  file per phase; Single-Shot writes `single-shot/`, holding the one prompt it
-  sent and the reply verbatim. Terminus keeps its own trajectory and terminal
-  recording, as it does under Harbor anywhere. These are kept out of the
-  workspace deliberately: they are evidence about the run, not part of the
-  repository being graded.
-- `<trial>/verifier/`: NL2RepoBench pytest output and `reward.txt`, the
-  fraction of the task's reference tests that passed, consumed by Harbor.
+- `<trial>/verifier/`: the tester's pytest output and `reward.txt`.
 
-### Why a run stopped
+The `failures` block of `resolved-setup.json` counts, under the same names in
+every arm, the requests that did not complete normally. Every category is
+written even at zero:
 
-A reward figure says a run scored badly. It does not say whether the model was
-wrong, whether it was cut off mid-sentence at the output ceiling, or whether the
-provider refused the request before generating anything at all. Those are three
-findings, and reading the first where the truth was the second or third turns a
-comparison of methods into a comparison of token budgets.
+- `output_limit_exhausted`: generation began and stopped at the token cap; the
+  reply exists and is truncated.
+- `context_exhausted`: the request was refused before generation because the
+  prompt plus `max_tokens` did not fit the context window; there is no reply.
+- `request_timeout`: the request was still being answered when its clock ran
+  out.
 
-Every arm counts the second and third, under the same names, in the `failures`
-block of its `resolved-setup.json`:
+Whether the generated code passes the benchmark's tests is the verifier's
+finding and never appears there.
 
-- `output_limit_exhausted` — generation began and stopped at the token cap.
-  There is a reply and it is truncated. What that costs differs by arm: a
-  Single-Shot reply is a partial repository, a CodeS sketch cut off
-  mid-definition fails to parse rather than failing a test, a CodeTeam
-  Developer's source file arrives unusable, and a Self-Collaboration Coder's
-  `edit_file` call arrives half-written.
-- `context_exhausted` — the request was refused before generation, because the
-  prompt plus the requested `max_tokens` did not fit the model's context
-  window. There is no reply at all. The remedy is a smaller prompt, where the
-  category above wants a larger ceiling, which is why they are counted apart.
-- `request_timeout` — the request was still being answered when its clock ran
-  out. Named so that a timeout cannot be filed under either of the two above.
-
-Counts rather than flags: one truncated reply among the hundreds a multi-agent
-run makes is a different finding from every reply being truncated. Every
-category is written even at zero, so a run that hit no ceiling and a run whose
-logging predates these categories do not look alike. Whether the generated code
-passes the benchmark's hidden tests is the verifier's finding, decided after the
-run has ended, and never appears here.
-
-To inspect results, stop any viewer started from an old clone and launch it
-from this repository with the current `jobs` directory:
+To inspect results, start Harbor's viewer from this repository with the
+current `jobs` directory (a viewer started from another clone keeps showing
+that clone's jobs until restarted):
 
 ```powershell
 .venv\Scripts\harbor.exe view .\jobs --jobs
 ```
 
-The viewer's jobs path is independent of the experiment runner. Seeing an old
-clone in the viewer is therefore harmless to runs, but that viewer will not
-show jobs created in this repository until it is restarted with the path above.
-
-Harbor's results view lists jobs with the agent that produced them, read from
-the `name` of the job's agent configuration rather than from its `import_path`.
-The launcher writes that name from the solution's own label, so the jobs list
-and the trials beneath it agree on what ran. Jobs created before this was
-written have no name in their `config.json` and will keep showing a blank agent
-column; the trials inside them were always labelled.
-
-The Harbor results view records the provider, model, and dataset label for each
-run, and aggregates uncached input, cached input, and output tokens across
-every model call a run made. All three solutions report this through the same
-accounting, so the totals mean the same thing for each. Cost is recorded when the
-OpenAI-compatible API includes a `cost` value in its usage response; otherwise
-Harbor leaves Cost USD empty rather than estimating it from a potentially stale
-pricing table. These fields apply to new runs and do not retrofit existing job
-directories.
+The viewer lists each job with the agent that produced it, the provider, model
+and dataset, and aggregates uncached input, cached input and output tokens
+across every model call. All arms report tokens through the same accounting.
+Cost is filled in only when the API's usage response includes a `cost` value;
+otherwise it is left empty rather than estimated.
 
 ## How a task is evaluated
 
-Each NL2RepoBench task runs two containers: `main`, a generic Python/Node image
-where the agent generates the project under `/workspace`, and a `tester`
-sidecar built from NL2RepoBench's own evaluator image, which holds the hidden
-benchmark tests. Once the agent finishes, Harbor's verifier hook signals the
-sidecar over the shared workspace volume; the sidecar strips any test files the
-agent generated, copies the remaining code on top of its own reference tests,
-installs the package, runs pytest, and reports the passing fraction as the
-reward. This mirrors NL2RepoBench's own upstream evaluation flow rather than
-reimplementing it.
+Each NL2RepoBench task runs two containers: `main`, a generic Python/Node
+image where the agent generates the project under `/workspace`, and a
+`tester` sidecar built from NL2RepoBench's own evaluator image, which holds
+the hidden reference tests. Once the agent finishes, Harbor's verifier hook
+signals the sidecar over the shared workspace volume; the sidecar strips any
+test files the agent generated, copies the remaining code on top of its own
+reference tests, installs the package, runs pytest, and reports the passing
+fraction as the reward. A solution's own test loop — Self-Collaboration's
+Tester, CodeTeam's QA — only ever runs the code and tests it wrote itself; the
+reference tests are never visible to the agent.
+
+## Tests and analysis
+
+```powershell
+.venv\Scripts\python.exe -m pytest
+```
+
+The notebooks under `notebooks/` read the job directories, select the subset,
+and produce the figures under `docs/figures/` and the LaTeX tables under
+`docs/tables/`; `job_analysis.py`, `job_figures.py` and `job_tables.py` are
+the shared code behind them. They need the analysis stack:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -e ".[analysis]"
+```
+
+`docs/architecture/` holds the PlantUML sources and renders of the platform's
+architecture diagrams.

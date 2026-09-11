@@ -1,17 +1,3 @@
-# Experiment setup: Self-Collaboration against the whole NL2RepoBench
-# benchmark — all 104 tasks of the pinned dataset.
-#
-# The benchmark is a dependency, not a checked-in copy: Harbor's registry
-# holds it as a digest-pinned dataset, and `benchmark.ref` fixes the version
-# every run of this configuration uses. Comparing a second code generation
-# solution means copying this file, changing only the `agent` section, and
-# leaving the `benchmark` block byte-identical.
-#
-# Scale: 104 tasks, each with its own tester image and its own agent and
-# verifier timeouts. Run sequentially the benchmark takes about ten hours, so
-# what makes it practical is `run.n_concurrent_trials` below. Start from
-# `math-verify-self-collaboration.yaml` when iterating on the setup itself.
-
 name: nl2repobench-self-collaboration
 description: >-
   Self-Collaboration (Analyst -> Coder <-> Tester) generates every

@@ -1,4 +1,3 @@
-
 name: nl2repobench-codes
 description: >-
   CodeS (RepoSketcher -> FileSketcher -> SketchFiller) generates the
@@ -16,7 +15,6 @@ run:
 benchmark:
   dataset: nl2repobench/nl2repobench
   ref: sha256:b0d58e327ee30a6e6584bd4843a53db52a3442e230630369da095ec564542712
-  #  n_tasks: 5 # Limited only for testing purposes
   image_mirror:
     - expects: us-docker.pkg.dev/cybertron-gcp-island-test-0rxn/applejax/walker_cheng/nl2repobench/
       pull_from: ghcr.io/multimodal-art-projection/nl2repobench/
