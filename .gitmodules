@@ -7,3 +7,6 @@
 [submodule "code_generation/CodeS"]
 	path = code_generation/CodeS
 	url = https://github.com/NL2Code/CodeS.git
+[submodule "benchmarks/nl2repobench/upstream"]
+	path = benchmarks/nl2repobench/upstream
+	url = https://github.com/multimodal-art-projection/NL2RepoBench.git

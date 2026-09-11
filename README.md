@@ -46,6 +46,12 @@ A run does not use these working copies: the agent clones the revision named in
 the experiment configuration into the task container, so a clone without them
 still runs.
 
+NL2RepoBench's published source is pinned the same way at
+`benchmarks/nl2repobench/upstream`, at the commit the subset selection reads
+its task metadata from. Nothing runs from it either: the tasks come from
+Harbor's registry, and `benchmarks/nl2repobench/` keeps the metadata cache
+and the selected subset beside it.
+
 ## Experiment configurations
 
 `configs/` is the home for run setup. One file describes one experiment: the
